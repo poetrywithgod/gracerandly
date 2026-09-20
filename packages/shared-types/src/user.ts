@@ -1,5 +1,7 @@
 export type UserRole = "requester" | "runner" | "platform_admin" | "trust_safety_admin" | "finance_ops_admin";
 
+export type Gender = "female" | "male" | "unspecified";
+
 export interface BaseUser {
   id: string;
   fullName: string;
@@ -12,6 +14,7 @@ export interface BaseUser {
 
 export interface Requester extends BaseUser {
   role: "requester";
+  gender: Gender;
   phoneVerified: boolean;
 }
 

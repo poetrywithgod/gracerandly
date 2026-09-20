@@ -1,4 +1,5 @@
-import { StyleSheet, View, ViewStyle } from "react-native";
+import { Platform, StyleSheet, View, ViewStyle } from "react-native";
+import type { RefObject } from "react";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { getTheme } from "@gracerandly/theme";
@@ -9,12 +10,27 @@ interface GlassCardProps {
   children: React.ReactNode;
   style?: ViewStyle;
   intensity?: number;
+  /**
+   * Ref to the BlurTargetView wrapping whatever should show through the
+   * glass (the screen's gradient/background). Required on Android — SDK 57's
+   * BlurView only blurs there when given an explicit target; without it,
+   * Android silently falls back to a flat semi-transparent tint instead of
+   * a real blur (that's the "muddy gray box" look instead of frosted glass).
+   * No-op on iOS/web, where BlurView blurs whatever's behind it natively.
+   */
+  blurTarget?: RefObject<View | null>;
 }
 
-export default function GlassCard({ children, style, intensity = 55 }: GlassCardProps) {
+export default function GlassCard({ children, style, intensity = 55, blurTarget }: GlassCardProps) {
   return (
     <View style={[styles.shadowWrap, style]}>
-      <BlurView intensity={intensity} tint="light" style={styles.blur}>
+      <BlurView
+        intensity={intensity}
+        tint="light"
+        style={styles.blur}
+        blurTarget={blurTarget}
+        blurMethod={Platform.OS === "android" ? "dimezisBlurView" : undefined}
+      >
         <LinearGradient
           colors={["rgba(255,255,255,0.30)", "rgba(255,255,255,0.10)"]}
           start={{ x: 0, y: 0 }}

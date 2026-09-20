@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   Text,
   StyleSheet,
@@ -9,11 +9,13 @@ import {
   View,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { BlurTargetView } from "expo-blur";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
 import AuthHeader from "../../components/AuthHeader";
 import GlassCard from "../../components/GlassCard";
 import FloatingLabelInput from "../../components/FloatingLabelInput";
+import PhoneField, { DEFAULT_COUNTRY, type Country } from "../../components/PhoneField";
 import Button from "../../components/Button";
 import { useAuth } from "../../context/AuthContext";
 import type { AuthStackParamList } from "../../navigation/types";
@@ -22,7 +24,7 @@ const theme = getTheme("light");
 
 type Props = NativeStackScreenProps<AuthStackParamList, "Login">;
 
-const PHONE_REGEX = /^\+?[0-9]{7,15}$/;
+const MIN_LOCAL_PHONE_DIGITS = 6;
 
 /** Deep, saturated gradient stops for a richer backdrop. */
 const GRADIENT_COLORS = [
@@ -35,17 +37,20 @@ const GRADIENT_LOCATIONS = [0, 0.55, 1] as const;
 
 export default function LoginScreen({ navigation }: Props) {
   const { signIn, isLoading } = useAuth();
-  const [phone, setPhone] = useState("");
+  const blurTargetRef = useRef<View | null>(null);
+
+  const [country, setCountry] = useState<Country>(DEFAULT_COUNTRY);
+  const [localPhone, setLocalPhone] = useState("");
   const [password, setPassword] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const phoneError = useMemo(() => {
     if (!submitted) return undefined;
-    if (!phone.trim()) return "Phone number is required";
-    if (!PHONE_REGEX.test(phone.trim())) return "Enter a valid phone number";
+    if (!localPhone) return "Phone number is required";
+    if (localPhone.length < MIN_LOCAL_PHONE_DIGITS) return "Enter a valid phone number";
     return undefined;
-  }, [phone, submitted]);
+  }, [localPhone, submitted]);
 
   const passwordError = useMemo(() => {
     if (!submitted) return undefined;
@@ -53,22 +58,21 @@ export default function LoginScreen({ navigation }: Props) {
     return undefined;
   }, [password, submitted]);
 
-  const canSubmit =
-    phone.trim().length > 0 && password.length > 0 && !isLoading;
+  const canSubmit = localPhone.length > 0 && password.length > 0 && !isLoading;
 
   const handleLogin = useCallback(async () => {
     setSubmitted(true);
     setFormError(null);
-    if (!PHONE_REGEX.test(phone.trim()) || !password) return;
+    if (localPhone.length < MIN_LOCAL_PHONE_DIGITS || !password) return;
 
     try {
-      await signIn({ phone: phone.trim(), password });
+      await signIn({ phone: `+${country.dialCode}${localPhone}`, password });
       // On success, AuthContext flips isAuthenticated and RootNavigator
       // swaps to MainNavigator automatically — nothing to navigate here.
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Login failed");
     }
-  }, [phone, password, signIn]);
+  }, [localPhone, password, signIn, country]);
 
   const handleForgotPassword = useCallback(() => {
     // navigation.navigate("ForgotPassword");
@@ -79,16 +83,25 @@ export default function LoginScreen({ navigation }: Props) {
   }, [navigation]);
 
   return (
-    <LinearGradient
-      colors={GRADIENT_COLORS}
-      locations={GRADIENT_LOCATIONS}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.gradient}
-    >
-      {/* Soft decorative blobs add depth behind the glass card */}
-      <View pointerEvents="none" style={styles.blobTop} />
-      <View pointerEvents="none" style={styles.blobBottom} />
+    <View style={styles.gradient}>
+      {/*
+        BlurTargetView wraps everything GlassCard's frosted-glass effect
+        should show through. On Android (Expo SDK 57+), BlurView only
+        produces a real blur when pointed at an explicit target via a ref —
+        without this it silently falls back to a flat tinted box.
+      */}
+      <BlurTargetView ref={blurTargetRef} style={StyleSheet.absoluteFill}>
+        <LinearGradient
+          colors={GRADIENT_COLORS}
+          locations={GRADIENT_LOCATIONS}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+        {/* Soft decorative blobs add depth behind the glass card */}
+        <View pointerEvents="none" style={styles.blobTop} />
+        <View pointerEvents="none" style={styles.blobBottom} />
+      </BlurTargetView>
 
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -101,18 +114,16 @@ export default function LoginScreen({ navigation }: Props) {
         >
           <AuthHeader heading="Welcome back" />
 
-          <GlassCard style={styles.card}>
-            <FloatingLabelInput
-              label="Phone number"
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-              autoCapitalize="none"
-              autoComplete="tel"
-              textContentType="telephoneNumber"
+          <GlassCard style={styles.card} blurTarget={blurTargetRef}>
+            <PhoneField
+              value={localPhone}
+              onChangeText={setLocalPhone}
+              country={country}
+              onChangeCountry={setCountry}
               returnKeyType="next"
               error={phoneError}
             />
+
             <FloatingLabelInput
               label="Password"
               value={password}
@@ -159,7 +170,7 @@ export default function LoginScreen({ navigation }: Props) {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </LinearGradient>
+    </View>
   );
 }
 

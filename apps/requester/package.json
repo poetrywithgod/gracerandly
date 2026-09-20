@@ -10,6 +10,7 @@
     "@gracerandly/theme": "workspace:*",
     "@react-navigation/native": "^7.4.1",
     "@react-navigation/native-stack": "^7.19.2",
+    "country-telephone-data": "^0.6.3",
     "expo": "~57.0.24",
     "expo-blur": "~57.0.3",
     "expo-font": "~57.0.4",
@@ -24,6 +25,7 @@
     "react-native-svg": "15.15.4"
   },
   "devDependencies": {
+    "@types/country-telephone-data": "^0.6.3",
     "@types/react": "~19.2.2",
     "typescript": "~5.6.3"
   },

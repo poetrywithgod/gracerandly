@@ -1,9 +1,18 @@
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import type { Gender } from "@gracerandly/shared-types";
 
 export interface AuthCredentials {
   phone: string;
   password: string;
+}
+
+export interface SignUpDetails {
+  fullName: string;
+  phone: string;
+  email?: string;
+  password: string;
+  gender: Gender;
 }
 
 interface AuthContextValue {
@@ -11,7 +20,7 @@ interface AuthContextValue {
   isLoading: boolean;
   error: string | null;
   signIn: (credentials: AuthCredentials) => Promise<void>;
-  signUp: (credentials: AuthCredentials) => Promise<void>;
+  signUp: (details: SignUpDetails) => Promise<void>;
   signOut: () => void;
 }
 
@@ -49,13 +58,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const signUp = useCallback(async ({ phone, password }: AuthCredentials) => {
+  const signUp = useCallback(async ({ fullName, phone, password }: SignUpDetails) => {
     setIsLoading(true);
     setError(null);
     try {
       await mockRequest();
-      if (!phone || !password) {
-        throw new Error("Phone number and password are required");
+      if (!fullName.trim() || !phone || !password) {
+        throw new Error("Full name, phone number and password are required");
       }
       setIsAuthenticated(true);
     } catch (err) {

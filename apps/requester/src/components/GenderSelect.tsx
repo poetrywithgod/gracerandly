@@ -1,9 +1,8 @@
 import { View, Pressable, Text, StyleSheet } from "react-native";
 import { getTheme } from "@gracerandly/theme";
+import type { Gender } from "@gracerandly/shared-types";
 
 const theme = getTheme("light");
-
-export type Gender = "female" | "male" | "unspecified";
 
 const OPTIONS: { value: Gender; label: string }[] = [
   { value: "female", label: "Female" },
