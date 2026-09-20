@@ -1,0 +1,17 @@
+{
+  "name": "gracerandly",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gracerandly - Get it done without leaving.",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "type-check": "turbo run type-check"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.2",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@12.5.1"
+}
