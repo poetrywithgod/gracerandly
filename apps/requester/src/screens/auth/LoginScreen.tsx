@@ -128,7 +128,7 @@ export default function LoginScreen({ navigation }: Props) {
               label="Password"
               value={password}
               onChangeText={setPassword}
-              secureTextEntry
+              isPassword
               autoCapitalize="none"
               autoComplete="password"
               textContentType="password"

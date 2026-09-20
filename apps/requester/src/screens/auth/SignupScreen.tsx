@@ -211,7 +211,7 @@ export default function SignupScreen({ navigation }: Props) {
               label="Password"
               value={password}
               onChangeText={setPassword}
-              secureTextEntry
+              isPassword
               autoCapitalize="none"
               autoComplete="password-new"
               textContentType="newPassword"
@@ -223,7 +223,7 @@ export default function SignupScreen({ navigation }: Props) {
               label="Confirm password"
               value={confirmPassword}
               onChangeText={setConfirmPassword}
-              secureTextEntry
+              isPassword
               autoCapitalize="none"
               autoComplete="password-new"
               textContentType="newPassword"
