@@ -15,11 +15,12 @@ import AuthHeader from "../../components/AuthHeader";
 import GlassCard from "../../components/GlassCard";
 import FloatingLabelInput from "../../components/FloatingLabelInput";
 import Button from "../../components/Button";
+import { useAuth } from "../../context/AuthContext";
 import type { AuthStackParamList } from "../../navigation/types";
 
 const theme = getTheme("light");
 
-type Props = NativeStackScreenProps<AuthStackParamList, "Login">;
+type Props = NativeStackScreenProps<AuthStackParamList, "Signup">;
 
 const PHONE_REGEX = /^\+?[0-9]{7,15}$/;
 
@@ -32,11 +33,12 @@ const GRADIENT_COLORS = [
 
 const GRADIENT_LOCATIONS = [0, 0.55, 1] as const;
 
-export default function LoginScreen({ navigation }: Props) {
+export default function SignupScreen({ navigation }: Props) {
+  const { signUp, isLoading } = useAuth();
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [submitted, setSubmitted] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const phoneError = useMemo(() => {
     if (!submitted) return undefined;
@@ -53,28 +55,24 @@ export default function LoginScreen({ navigation }: Props) {
   }, [password, submitted]);
 
   const canSubmit =
-    phone.trim().length > 0 && password.length > 0 && !isSubmitting;
+    phone.trim().length > 0 && password.length > 0 && !isLoading;
 
-  const handleLogin = useCallback(async () => {
+  const handleSignup = useCallback(async () => {
     setSubmitted(true);
+    setFormError(null);
     if (!PHONE_REGEX.test(phone.trim()) || password.length < 6) return;
 
     try {
-      setIsSubmitting(true);
-      // TODO: wire up actual login call
+      await signUp({ phone: phone.trim(), password });
+      // On success, AuthContext flips isAuthenticated and RootNavigator
+      // swaps to MainNavigator automatically — nothing to navigate here.
     } catch (err) {
-      console.warn("Login failed", err);
-    } finally {
-      setIsSubmitting(false);
+      setFormError(err instanceof Error ? err.message : "Sign up failed");
     }
-  }, [phone, password]);
+  }, [phone, password, signUp]);
 
-  const handleForgotPassword = useCallback(() => {
-    // navigation.navigate("ForgotPassword");
-  }, []);
-
-  const handleGoToSignup = useCallback(() => {
-    navigation.navigate("Signup");
+  const handleGoToLogin = useCallback(() => {
+    navigation.navigate("Login");
   }, [navigation]);
 
   return (
@@ -98,7 +96,7 @@ export default function LoginScreen({ navigation }: Props) {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <AuthHeader heading="Welcome back" />
+          <AuthHeader heading="Create your account" />
 
           <GlassCard style={styles.card}>
             <FloatingLabelInput
@@ -118,40 +116,32 @@ export default function LoginScreen({ navigation }: Props) {
               onChangeText={setPassword}
               secureTextEntry
               autoCapitalize="none"
-              autoComplete="password"
-              textContentType="password"
+              autoComplete="password-new"
+              textContentType="newPassword"
               returnKeyType="done"
-              onSubmitEditing={handleLogin}
+              onSubmitEditing={handleSignup}
               error={passwordError}
             />
 
-            <Pressable
-              style={styles.forgot}
-              onPress={handleForgotPassword}
-              hitSlop={8}
-              accessibilityRole="link"
-              accessibilityLabel="Forgot password"
-            >
-              <Text style={styles.forgotText}>Forgot password?</Text>
-            </Pressable>
+            {formError ? <Text style={styles.formError}>{formError}</Text> : null}
 
             <Button
-              label={isSubmitting ? "Logging in…" : "Log in"}
-              onPress={handleLogin}
+              label={isLoading ? "Creating account…" : "Sign up"}
+              onPress={handleSignup}
               disabled={!canSubmit}
-              style={styles.loginButton}
+              style={styles.signupButton}
             />
           </GlassCard>
 
           <View style={styles.footer}>
-            <Text style={styles.footerText}>Don&apos;t have an account? </Text>
+            <Text style={styles.footerText}>Already have an account? </Text>
             <Pressable
-              onPress={handleGoToSignup}
+              onPress={handleGoToLogin}
               hitSlop={8}
               accessibilityRole="link"
-              accessibilityLabel="Go to sign up"
+              accessibilityLabel="Go to log in"
             >
-              <Text style={styles.footerLink}>Sign up</Text>
+              <Text style={styles.footerLink}>Log in</Text>
             </Pressable>
           </View>
         </ScrollView>
@@ -205,18 +195,14 @@ const styles = StyleSheet.create({
     elevation: 12,
   },
 
-  forgot: {
-    alignSelf: "flex-end",
+  formError: {
+    fontFamily: theme.fonts.uiMedium,
+    fontSize: 13,
+    color: "#FFB4A8",
     marginBottom: theme.spacing.sm,
   },
-  forgotText: {
-    fontFamily: theme.fonts.uiSemibold,
-    fontSize: 13,
-    color: theme.colors.textOnPrimary, // crisp white, not 0.8 alpha
-    opacity: 0.95,
-  },
 
-  loginButton: {
+  signupButton: {
     marginTop: theme.spacing.sm,
   },
 

@@ -17,6 +17,7 @@ import {
 } from "@expo-google-fonts/merriweather";
 import { StatusBar } from "expo-status-bar";
 import RootNavigator from "./src/navigation/RootNavigator";
+import { AuthProvider } from "./src/context/AuthContext";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -55,10 +56,12 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
-        <StatusBar style="light" />
-        <RootNavigator />
-      </View>
+      <AuthProvider>
+        <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
+          <StatusBar style="light" />
+          <RootNavigator />
+        </View>
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }
