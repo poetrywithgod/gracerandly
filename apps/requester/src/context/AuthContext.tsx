@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { Gender } from "@gracerandly/shared-types";
+import type { Gender, Requester } from "@gracerandly/shared-types";
+import { apiFetch, ApiError } from "../lib/apiClient";
 
 export interface AuthCredentials {
   phone: string;
@@ -15,10 +16,17 @@ export interface SignUpDetails {
   gender: Gender;
 }
 
+interface AuthResponse {
+  token: string;
+  user: Requester;
+}
+
 interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
+  user: Requester | null;
+  token: string | null;
   signIn: (credentials: AuthCredentials) => Promise<void>;
   signUp: (details: SignUpDetails) => Promise<void>;
   signOut: () => void;
@@ -26,49 +34,49 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-// TODO: replace with real calls to apps/api once auth endpoints exist.
-// This mock just simulates network latency and always succeeds so the
-// Login/Signup screens are clickable end-to-end (they flip RootNavigator
-// over to MainNavigator) while the real API is being built.
-const MOCK_LATENCY_MS = 600;
-
-function mockRequest(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, MOCK_LATENCY_MS));
-}
-
+// Token lives in memory only for now — it's lost on app reload/restart.
+// TODO: persist it (expo-secure-store) so a session survives a restart,
+// and add a bootstrap call to GET /auth/me on launch to restore it.
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [user, setUser] = useState<Requester | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isAuthenticated = !!token;
 
   const signIn = useCallback(async ({ phone, password }: AuthCredentials) => {
     setIsLoading(true);
     setError(null);
     try {
-      await mockRequest();
-      if (!phone || !password) {
-        throw new Error("Phone number and password are required");
-      }
-      setIsAuthenticated(true);
+      const response = await apiFetch<AuthResponse>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ phone, password }),
+      });
+      setToken(response.token);
+      setUser(response.user);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      const message = err instanceof ApiError ? err.message : "Something went wrong";
+      setError(message);
       throw err;
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  const signUp = useCallback(async ({ fullName, phone, password }: SignUpDetails) => {
+  const signUp = useCallback(async (details: SignUpDetails) => {
     setIsLoading(true);
     setError(null);
     try {
-      await mockRequest();
-      if (!fullName.trim() || !phone || !password) {
-        throw new Error("Full name, phone number and password are required");
-      }
-      setIsAuthenticated(true);
+      const response = await apiFetch<AuthResponse>("/auth/signup", {
+        method: "POST",
+        body: JSON.stringify(details),
+      });
+      setToken(response.token);
+      setUser(response.user);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      const message = err instanceof ApiError ? err.message : "Something went wrong";
+      setError(message);
       throw err;
     } finally {
       setIsLoading(false);
@@ -76,12 +84,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(() => {
-    setIsAuthenticated(false);
+    setToken(null);
+    setUser(null);
   }, []);
 
   const value = useMemo(
-    () => ({ isAuthenticated, isLoading, error, signIn, signUp, signOut }),
-    [isAuthenticated, isLoading, error, signIn, signUp, signOut]
+    () => ({ isAuthenticated, isLoading, error, user, token, signIn, signUp, signOut }),
+    [isAuthenticated, isLoading, error, user, token, signIn, signUp, signOut]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
