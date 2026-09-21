@@ -29,13 +29,6 @@
         {
           "locationAlwaysAndWhenInUsePermission": "Gracerandly uses your location to set pickup and drop-off points for your errands."
         }
-      ],
-      [
-        "react-native-maps",
-        {
-          "androidGoogleMapsApiKey": "process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY_ANDROID",
-          "iosGoogleMapsApiKey": "process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY_IOS"
-        }
       ]
     ]
   }

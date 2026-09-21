@@ -1,23 +1,76 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal, View, Text, StyleSheet, Platform } from "react-native";
-import MapView, { type Region } from "react-native-maps";
+import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { MapPin, X } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { GeoPoint } from "@gracerandly/shared-types";
 import Button from "./Button";
 import { getCurrentCoordinate, reverseGeocode, LocationPermissionDeniedError } from "../lib/location";
+import { LEAFLET_JS, LEAFLET_CSS } from "../lib/leafletAssets";
 
 const theme = getTheme("light");
+
+interface Coordinate {
+  latitude: number;
+  longitude: number;
+}
 
 // Port Harcourt city center — used as a sane default map center when we
 // have no better starting point (no `initial` prop and location
 // permission hasn't been granted/resolved yet).
-const DEFAULT_REGION: Region = {
-  latitude: 4.8156,
-  longitude: 7.0498,
-  latitudeDelta: 0.05,
-  longitudeDelta: 0.05,
-};
+const DEFAULT_COORDINATE: Coordinate = { latitude: 4.8156, longitude: 7.0498 };
+const DEFAULT_ZOOM = 13;
+const FOCUSED_ZOOM = 16;
+
+function toCoordinate(point: GeoPoint | undefined): Coordinate {
+  return point ? { latitude: point.lat, longitude: point.lng } : DEFAULT_COORDINATE;
+}
+
+// Self-contained page: Leaflet + OpenStreetMap tiles, both free and
+// keyless (unlike react-native-maps, which wraps the native Google Maps
+// SDK on Android and needs a billed API key to render anything at all —
+// that's what was causing the blank map originally, not a config mistake).
+// Leaflet itself is bundled inline (see leafletAssets.ts) rather than
+// fetched from a CDN, so the map still renders even when that CDN request
+// fails on a given device/network — only the OpenStreetMap tile images
+// still need a live network request, same as any online map.
+function buildMapHtml(center: Coordinate, zoom: number): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <style>${LEAFLET_CSS}</style>
+  <style>
+    html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; }
+    .leaflet-control-attribution { font-size: 9px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>${LEAFLET_JS}</script>
+  <script>
+    window.map = L.map('map', { zoomControl: false }).setView([${center.latitude}, ${center.longitude}], ${zoom});
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(window.map);
+
+    function post(type, payload) {
+      window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({ type: type }, payload || {})));
+    }
+
+    window.map.on('moveend', function () {
+      var c = window.map.getCenter();
+      post('regionChange', { lat: c.lat, lng: c.lng });
+    });
+
+    post('ready');
+  </script>
+</body>
+</html>`;
+}
 
 interface LocationPickerModalProps {
   visible: boolean;
@@ -34,16 +87,21 @@ export default function LocationPickerModal({
   onCancel,
   onConfirm,
 }: LocationPickerModalProps) {
-  const mapRef = useRef<MapView>(null);
-  const [region, setRegion] = useState<Region>(
-    initial
-      ? { ...DEFAULT_REGION, latitude: initial.lat, longitude: initial.lng }
-      : DEFAULT_REGION
-  );
+  const webviewRef = useRef<WebView>(null);
+  const [mapHtml] = useState(() => buildMapHtml(toCoordinate(initial), initial ? FOCUSED_ZOOM : DEFAULT_ZOOM));
+  const [isMapReady, setIsMapReady] = useState(false);
+  const [region, setRegion] = useState<Coordinate>(() => toCoordinate(initial));
   const [address, setAddress] = useState<string | undefined>(initial?.address);
   const [isResolvingAddress, setIsResolvingAddress] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
+
+  const recenterMap = useCallback((coordinate: Coordinate, zoom = FOCUSED_ZOOM) => {
+    webviewRef.current?.injectJavaScript(
+      `if (window.map) { window.map.setView([${coordinate.latitude}, ${coordinate.longitude}], ${zoom}); }
+       true;`
+    );
+  }, []);
 
   const resolveAddressFor = useCallback(async (latitude: number, longitude: number) => {
     setIsResolvingAddress(true);
@@ -52,19 +110,32 @@ export default function LocationPickerModal({
     setIsResolvingAddress(false);
   }, []);
 
+  // This picker is one shared instance reused for both the pickup and
+  // drop-off fields (see CreateErrandScreen) — every time it opens, re-sync
+  // to whichever GeoPoint it's editing now rather than whatever was left
+  // over from the last time it was open for the other field.
+  useEffect(() => {
+    if (!visible) return;
+    const coordinate = toCoordinate(initial);
+    setRegion(coordinate);
+    setAddress(initial?.address);
+    setLocationError(null);
+    if (isMapReady) {
+      recenterMap(coordinate, initial ? FOCUSED_ZOOM : DEFAULT_ZOOM);
+    }
+    // isMapReady/recenterMap intentionally excluded: this effect keys off
+    // `visible`/`initial` changing, not the map's readiness — the
+    // "auto-locate on first open" effect below handles the ready-yet case.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, initial]);
+
   async function handleUseCurrentLocation() {
     setIsLocating(true);
     setLocationError(null);
     try {
       const coordinate = await getCurrentCoordinate();
-      const nextRegion: Region = {
-        latitude: coordinate.latitude,
-        longitude: coordinate.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      };
-      mapRef.current?.animateToRegion(nextRegion, 400);
-      setRegion(nextRegion);
+      setRegion(coordinate);
+      recenterMap(coordinate);
       resolveAddressFor(coordinate.latitude, coordinate.longitude);
     } catch (err) {
       setLocationError(
@@ -81,15 +152,32 @@ export default function LocationPickerModal({
   // with no pre-existing pin, so the picker doesn't always start in the
   // same default spot for every requester.
   useEffect(() => {
-    if (!visible || initial) return;
+    if (!visible || initial || !isMapReady) return;
     handleUseCurrentLocation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
+  }, [visible, isMapReady]);
 
-  const handleRegionChangeComplete = useCallback(
-    (nextRegion: Region) => {
-      setRegion(nextRegion);
-      resolveAddressFor(nextRegion.latitude, nextRegion.longitude);
+  const handleMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      let data: unknown;
+      try {
+        data = JSON.parse(event.nativeEvent.data);
+      } catch {
+        return;
+      }
+      if (typeof data !== "object" || data === null) return;
+      const message = data as { type?: string; lat?: number; lng?: number };
+
+      if (message.type === "ready") {
+        setIsMapReady(true);
+      } else if (
+        message.type === "regionChange" &&
+        typeof message.lat === "number" &&
+        typeof message.lng === "number"
+      ) {
+        setRegion({ latitude: message.lat, longitude: message.lng });
+        resolveAddressFor(message.lat, message.lng);
+      }
     },
     [resolveAddressFor]
   );
@@ -111,13 +199,12 @@ export default function LocationPickerModal({
           </View>
         </View>
 
-        <MapView
-          ref={mapRef}
+        <WebView
+          ref={webviewRef}
           style={styles.map}
-          initialRegion={region}
-          onRegionChangeComplete={handleRegionChangeComplete}
-          showsUserLocation
-          showsMyLocationButton={false}
+          originWhitelist={["*"]}
+          source={{ html: mapHtml }}
+          onMessage={handleMessage}
         />
 
         <View style={styles.centerPin} pointerEvents="none">
