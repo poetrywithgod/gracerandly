@@ -3,11 +3,15 @@ export type AuthStackParamList = {
   Signup: undefined;
 };
 
-export type MainStackParamList = {
+export type TabParamList = {
   Home: undefined;
+  Profile: undefined;
+};
+
+export type MainStackParamList = {
+  Tabs: undefined;
   CreateErrand: undefined;
   ErrandTracking: { errandId: string };
-  Profile: undefined;
 };
 
 export type RootStackParamList = {

@@ -1,16 +1,17 @@
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import HomeScreen from "../screens/HomeScreen";
+import TabNavigator from "./TabNavigator";
 import CreateErrandScreen from "../screens/CreateErrandScreen";
 import type { MainStackParamList } from "./types";
 
-// ErrandTracking / Profile screens land in later work - this stack
-// carries Home and CreateErrand for now.
+// ErrandTracking lands in later work. Tabs (Home/Profile) is the base of
+// the stack; CreateErrand pushes on top full-screen, hiding the tab bar
+// automatically, which is the standard nested tab-inside-stack pattern.
 const Stack = createNativeStackNavigator<MainStackParamList>();
 
 export default function MainNavigator() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Home" component={HomeScreen} />
+      <Stack.Screen name="Tabs" component={TabNavigator} />
       <Stack.Screen
         name="CreateErrand"
         component={CreateErrandScreen}

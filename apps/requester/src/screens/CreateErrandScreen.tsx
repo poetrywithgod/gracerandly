@@ -5,7 +5,6 @@ import {
   ScrollView,
   Pressable,
   StyleSheet,
-  Alert,
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
@@ -18,6 +17,7 @@ import Button from "../components/Button";
 import TextField from "../components/TextField";
 import PillSelect from "../components/PillSelect";
 import LocationPickerModal from "../components/LocationPickerModal";
+import ErrandPostedModal from "../components/ErrandPostedModal";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
 import type { MainStackParamList } from "../navigation/types";
@@ -68,6 +68,7 @@ export default function CreateErrandScreen() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
 
   function updateItem(key: string, patch: Partial<DraftItem>) {
     setItems((prev) => prev.map((item) => (item.key === key ? { ...item, ...patch } : item)));
@@ -129,9 +130,7 @@ export default function CreateErrandScreen() {
         body: JSON.stringify(payload),
       });
 
-      Alert.alert("Errand posted", "We're finding a runner for you.", [
-        { text: "OK", onPress: () => navigation.navigate("Home") },
-      ]);
+      setShowSuccessModal(true);
     } catch (err) {
       setSubmitError(err instanceof ApiError ? err.message : "Something went wrong");
     } finally {
@@ -256,6 +255,8 @@ export default function CreateErrandScreen() {
           setActiveField(null);
         }}
       />
+
+      <ErrandPostedModal visible={showSuccessModal} onDone={() => navigation.goBack()} />
     </KeyboardAvoidingView>
   );
 }
