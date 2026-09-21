@@ -7,6 +7,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import authRouter from "./routes/auth";
+import errandsRouter from "./routes/errands";
 import { errorHandler } from "./middleware/errorHandler";
 
 const app = express();
@@ -20,6 +21,7 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/auth", authRouter);
+app.use("/errands", errandsRouter);
 
 // Must be registered last — Express identifies error-handling middleware
 // by its four-argument signature.

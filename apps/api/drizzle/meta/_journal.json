@@ -8,6 +8,13 @@
       "when": 1789926367266,
       "tag": "0000_smart_jimmy_woo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789948518264,
+      "tag": "0001_soft_the_call",
+      "breakpoints": true
     }
   ]
 }

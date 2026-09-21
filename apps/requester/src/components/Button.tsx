@@ -1,4 +1,4 @@
-import { Pressable, Text, StyleSheet, ViewStyle } from "react-native";
+import { Pressable, Text, StyleSheet, ViewStyle, ActivityIndicator } from "react-native";
 import { getTheme } from "@gracerandly/theme";
 
 const theme = getTheme("light");
@@ -11,24 +11,40 @@ interface ButtonProps {
   variant?: Variant;
   style?: ViewStyle;
   disabled?: boolean;
+  loading?: boolean;
 }
 
-export default function Button({ label, onPress, variant = "primary", style, disabled }: ButtonProps) {
+export default function Button({
+  label,
+  onPress,
+  variant = "primary",
+  style,
+  disabled,
+  loading,
+}: ButtonProps) {
+  const isDisabled = disabled || loading;
+
   return (
     <Pressable
       onPress={onPress}
-      disabled={disabled}
+      disabled={isDisabled}
       style={({ pressed }) => [
         styles.base,
         variantStyles[variant],
-        disabled && styles.disabled,
-        pressed && !disabled && styles.pressed,
+        isDisabled && styles.disabled,
+        pressed && !isDisabled && styles.pressed,
         style,
       ]}
     >
-      <Text style={[styles.label, variant === "ghost" && { color: theme.colors.primary }]}>
-        {label}
-      </Text>
+      {loading ? (
+        <ActivityIndicator
+          color={variant === "ghost" ? theme.colors.primary : theme.colors.textOnPrimary}
+        />
+      ) : (
+        <Text style={[styles.label, variant === "ghost" && { color: theme.colors.primary }]}>
+          {label}
+        </Text>
+      )}
     </Pressable>
   );
 }
