@@ -3,7 +3,7 @@ import { eq, or } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { db } from "../db/client";
 import { requesters } from "../db/schema";
-import { signupSchema, loginSchema } from "../schemas/auth";
+import { signupSchema, loginSchema, updateProfileSchema } from "../schemas/auth";
 import { signAuthToken } from "../lib/jwt";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -105,6 +105,40 @@ router.get(
     if (!row) {
       throw AppErrors.notFound("Requester not found");
     }
+
+    res.json({ user: toRequester(row) });
+  })
+);
+
+router.patch(
+  "/me",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const input = updateProfileSchema.parse(req.body);
+    if (Object.keys(input).length === 0) {
+      throw AppErrors.validation("Nothing to update");
+    }
+
+    if (input.email) {
+      const clash = await db
+        .select({ id: requesters.id })
+        .from(requesters)
+        .where(eq(requesters.email, input.email))
+        .limit(1);
+      if (clash.length > 0 && clash[0].id !== req.requesterId) {
+        throw AppErrors.conflict("An account with this email already exists");
+      }
+    }
+
+    const [row] = await db
+      .update(requesters)
+      .set({
+        ...(input.fullName !== undefined && { fullName: input.fullName }),
+        ...(input.email !== undefined && { email: input.email }),
+        ...(input.gender !== undefined && { gender: input.gender }),
+      })
+      .where(eq(requesters.id, req.requesterId!))
+      .returning();
 
     res.json({ user: toRequester(row) });
   })

@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet } from "react-native";
+import { Pressable, View, Text, StyleSheet } from "react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { Errand, ErrandStatus } from "@gracerandly/shared-types";
 
@@ -41,9 +41,26 @@ function itemsSummary(errand: Errand): string {
   return names.length > 0 ? names : "No items listed";
 }
 
-export default function ErrandCard({ errand }: { errand: Errand }) {
+// Short relative-ish timestamp: "Just now" / "12m ago" / "3h ago", falling
+// back to a compact date once it's more than a day old.
+function formatRelativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(iso).toLocaleDateString("en-NG", { day: "numeric", month: "short" });
+}
+
+interface ErrandCardProps {
+  errand: Errand;
+  onPress?: () => void;
+}
+
+export default function ErrandCard({ errand, onPress }: ErrandCardProps) {
   return (
-    <View style={styles.card}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
       <View style={styles.header}>
         <View style={[styles.statusPill, { backgroundColor: STATUS_COLORS[errand.status] }]}>
           <Text style={styles.statusText}>{STATUS_LABELS[errand.status]}</Text>
@@ -57,7 +74,8 @@ export default function ErrandCard({ errand }: { errand: Errand }) {
       <Text style={styles.dropoff} numberOfLines={1}>
         To: {errand.dropoff.address ?? `${errand.dropoff.lat.toFixed(4)}, ${errand.dropoff.lng.toFixed(4)}`}
       </Text>
-    </View>
+      <Text style={styles.timestamp}>{formatRelativeTime(errand.createdAt)}</Text>
+    </Pressable>
   );
 }
 
@@ -68,6 +86,7 @@ const styles = StyleSheet.create({
     padding: theme.spacing.md,
     marginBottom: theme.spacing.sm,
   },
+  pressed: { opacity: 0.85 },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -105,5 +124,11 @@ const styles = StyleSheet.create({
     fontFamily: theme.fonts.ui,
     fontSize: 12,
     color: theme.colors.textMuted,
+  },
+  timestamp: {
+    fontFamily: theme.fonts.ui,
+    fontSize: 11,
+    color: theme.colors.textMuted,
+    marginTop: 6,
   },
 });

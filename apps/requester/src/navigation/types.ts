@@ -10,7 +10,8 @@ export type TabParamList = {
 
 export type MainStackParamList = {
   Tabs: undefined;
-  CreateErrand: undefined;
+  CreateErrand: { errandId?: string } | undefined;
+  ErrandDetail: { errandId: string };
   ErrandTracking: { errandId: string };
 };
 

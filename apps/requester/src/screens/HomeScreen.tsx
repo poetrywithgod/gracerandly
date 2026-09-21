@@ -59,7 +59,9 @@ export default function HomeScreen() {
       contentContainerStyle={styles.content}
       data={errands ?? []}
       keyExtractor={(item) => item.id}
-      renderItem={({ item }) => <ErrandCard errand={item} />}
+      renderItem={({ item }) => (
+        <ErrandCard errand={item} onPress={() => navigation.navigate("ErrandDetail", { errandId: item.id })} />
+      )}
       refreshControl={
         <RefreshControl refreshing={isRefreshing} onRefresh={() => loadErrands(true)} />
       }

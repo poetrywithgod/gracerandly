@@ -6,10 +6,17 @@ const theme = getTheme("light");
 
 interface ErrandPostedModalProps {
   visible: boolean;
+  title?: string;
+  body?: string;
   onDone: () => void;
 }
 
-export default function ErrandPostedModal({ visible, onDone }: ErrandPostedModalProps) {
+export default function ErrandPostedModal({
+  visible,
+  title = "Errand posted!",
+  body = "We're finding a runner near you. You'll get an update as soon as one accepts.",
+  onDone,
+}: ErrandPostedModalProps) {
   return (
     <Modal visible={visible} transparent animationType="fade">
       <View style={styles.backdrop}>
@@ -19,10 +26,8 @@ export default function ErrandPostedModal({ visible, onDone }: ErrandPostedModal
             style={styles.badge}
             resizeMode="contain"
           />
-          <Text style={styles.title}>Errand posted!</Text>
-          <Text style={styles.body}>
-            We're finding a runner near you. You'll get an update as soon as one accepts.
-          </Text>
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.body}>{body}</Text>
           <Button label="Done" onPress={onDone} style={styles.button} />
         </View>
       </View>

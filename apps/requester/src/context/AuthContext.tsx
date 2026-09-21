@@ -19,6 +19,12 @@ export interface SignUpDetails {
   gender: Gender;
 }
 
+export interface UpdateProfileDetails {
+  fullName?: string;
+  email?: string;
+  gender?: Gender;
+}
+
 interface AuthResponse {
   token: string;
   user: Requester;
@@ -38,6 +44,7 @@ interface AuthContextValue {
   signIn: (credentials: AuthCredentials) => Promise<void>;
   signUp: (details: SignUpDetails) => Promise<void>;
   signOut: () => Promise<void>;
+  updateProfile: (details: UpdateProfileDetails) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -126,6 +133,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const updateProfile = useCallback(
+    async (details: UpdateProfileDetails) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const response = await apiFetch<MeResponse>("/auth/me", {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify(details),
+        });
+        setUser(response.user);
+      } catch (err) {
+        setError(readableError(err));
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [token]
+  );
+
   const signOut = useCallback(async () => {
     await SecureStore.deleteItemAsync(TOKEN_STORAGE_KEY);
     setToken(null);
@@ -143,8 +171,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signIn,
       signUp,
       signOut,
+      updateProfile,
     }),
-    [isAuthenticated, isLoading, isRestoring, error, user, token, signIn, signUp, signOut]
+    [
+      isAuthenticated,
+      isLoading,
+      isRestoring,
+      error,
+      user,
+      token,
+      signIn,
+      signUp,
+      signOut,
+      updateProfile,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

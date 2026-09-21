@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -8,9 +8,10 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { MapPin, Plus, Trash2 } from "lucide-react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { CalendarClock, MapPin, Plus, Trash2 } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { Errand, ErrandCategory, ErrandUrgency, GeoPoint } from "@gracerandly/shared-types";
 import Button from "../components/Button";
@@ -18,6 +19,7 @@ import TextField from "../components/TextField";
 import PillSelect from "../components/PillSelect";
 import LocationPickerModal from "../components/LocationPickerModal";
 import ErrandPostedModal from "../components/ErrandPostedModal";
+import LoadingScreen from "../components/LoadingScreen";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
 import type { MainStackParamList } from "../navigation/types";
@@ -53,12 +55,33 @@ function describeLocation(point: GeoPoint | null): string {
   return point.address ?? `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
 }
 
+function formatScheduledFor(date: Date | null): string {
+  if (!date) return "";
+  return date.toLocaleString("en-NG", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+type CreateErrandRouteProp = RouteProp<MainStackParamList, "CreateErrand">;
+
 export default function CreateErrandScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<MainStackParamList>>();
+  const route = useRoute<CreateErrandRouteProp>();
   const { token } = useAuth();
+  const errandId = route.params?.errandId;
+  const isEditMode = !!errandId;
+
+  const [isLoadingErrand, setIsLoadingErrand] = useState(isEditMode);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const [category, setCategory] = useState<ErrandCategory | null>(null);
   const [urgency, setUrgency] = useState<ErrandUrgency | null>(null);
+  const [scheduledFor, setScheduledFor] = useState<Date | null>(null);
+  const [schedulerStep, setSchedulerStep] = useState<"date" | "time" | null>(null);
   const [pickup, setPickup] = useState<GeoPoint | null>(null);
   const [dropoff, setDropoff] = useState<GeoPoint | null>(null);
   const [activeField, setActiveField] = useState<"pickup" | "dropoff" | null>(null);
@@ -69,6 +92,48 @@ export default function CreateErrandScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+
+  useEffect(() => {
+    navigation.setOptions({ title: isEditMode ? "Edit errand" : "Post an errand" });
+  }, [navigation, isEditMode]);
+
+  useEffect(() => {
+    if (!isEditMode) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const { errand } = await apiFetch<{ errand: Errand }>(`/errands/${errandId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled) return;
+
+        setCategory(errand.category);
+        setUrgency(errand.urgency);
+        setScheduledFor(errand.scheduledFor ? new Date(errand.scheduledFor) : null);
+        setPickup(errand.pickup);
+        setDropoff(errand.dropoff);
+        setItems(
+          errand.items.map((item) => ({
+            key: item.id,
+            name: item.name,
+            quantity: String(item.quantity),
+            notes: item.notes ?? "",
+          }))
+        );
+        setInstructions(errand.instructions ?? "");
+        setEstimatedCost(String(errand.estimatedCost));
+      } catch {
+        if (!cancelled) setLoadFailed(true);
+      } finally {
+        if (!cancelled) setIsLoadingErrand(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditMode, errandId, token]);
 
   function updateItem(key: string, patch: Partial<DraftItem>) {
     setItems((prev) => prev.map((item) => (item.key === key ? { ...item, ...patch } : item)));
@@ -87,6 +152,9 @@ export default function CreateErrandScreen() {
 
     if (!category) nextErrors.category = "Choose a category";
     if (!urgency) nextErrors.urgency = "Choose how urgent this is";
+    if (urgency === "scheduled" && !scheduledFor) {
+      nextErrors.scheduledFor = "Set a time for this errand";
+    }
     if (!pickup) nextErrors.pickup = "Set a pickup location";
     if (!dropoff) nextErrors.dropoff = "Set a drop-off location";
 
@@ -111,6 +179,7 @@ export default function CreateErrandScreen() {
       const payload = {
         category,
         urgency,
+        scheduledFor: urgency === "scheduled" ? scheduledFor?.toISOString() : undefined,
         pickup,
         dropoff,
         items: items
@@ -124,8 +193,8 @@ export default function CreateErrandScreen() {
         estimatedCost: Math.round(Number(estimatedCost)),
       };
 
-      await apiFetch<{ errand: Errand }>("/errands", {
-        method: "POST",
+      await apiFetch<{ errand: Errand }>(isEditMode ? `/errands/${errandId}` : "/errands", {
+        method: isEditMode ? "PATCH" : "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
       });
@@ -138,6 +207,48 @@ export default function CreateErrandScreen() {
     }
   }
 
+  function handleSchedulerChange(_event: unknown, selected?: Date) {
+    if (Platform.OS === "android") {
+      // Android's picker is a one-shot dialog: a date pick chains straight
+      // into the time dialog; a time pick finalizes. Dismissal (no
+      // `selected`) cancels the whole flow rather than leaving it stuck
+      // mid-step.
+      if (!selected) {
+        setSchedulerStep(null);
+        return;
+      }
+      if (schedulerStep === "date") {
+        setScheduledFor(selected);
+        setSchedulerStep("time");
+      } else if (schedulerStep === "time") {
+        setScheduledFor((prev) => {
+          const base = prev ?? selected;
+          const combined = new Date(base);
+          combined.setHours(selected.getHours(), selected.getMinutes());
+          return combined;
+        });
+        setSchedulerStep(null);
+      }
+      return;
+    }
+
+    // iOS's inline picker supports mode="datetime" directly.
+    if (selected) setScheduledFor(selected);
+  }
+
+  if (isLoadingErrand) {
+    return <LoadingScreen message="Loading errand…" />;
+  }
+
+  if (loadFailed) {
+    return (
+      <View style={styles.loadFailedContainer}>
+        <Text style={styles.errorText}>Couldn't load this errand.</Text>
+        <Button label="Go back" variant="ghost" onPress={() => navigation.goBack()} />
+      </View>
+    );
+  }
+
   return (
     <KeyboardAvoidingView
       style={styles.flex}
@@ -148,7 +259,7 @@ export default function CreateErrandScreen() {
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>Post an errand</Text>
+        <Text style={styles.title}>{isEditMode ? "Edit errand" : "Post an errand"}</Text>
 
         <PillSelect
           label="Category"
@@ -165,6 +276,51 @@ export default function CreateErrandScreen() {
           onChange={setUrgency}
           error={errors.urgency}
         />
+
+        {urgency === "scheduled" ? (
+          <View style={styles.locationFieldWrapper}>
+            <Text style={styles.sectionLabel}>Scheduled for</Text>
+            <Pressable
+              onPress={() => setSchedulerStep(Platform.OS === "android" ? "date" : "time")}
+              style={styles.locationField}
+            >
+              <CalendarClock size={18} color={theme.colors.primary} />
+              <Text
+                style={[
+                  styles.locationFieldText,
+                  !scheduledFor && styles.locationFieldPlaceholder,
+                ]}
+                numberOfLines={1}
+              >
+                {formatScheduledFor(scheduledFor) || "Tap to set date & time"}
+              </Text>
+            </Pressable>
+            {errors.scheduledFor ? (
+              <Text style={styles.errorText}>{errors.scheduledFor}</Text>
+            ) : null}
+            {Platform.OS === "ios" && schedulerStep ? (
+              <DateTimePicker
+                value={scheduledFor ?? new Date()}
+                mode="datetime"
+                minimumDate={new Date()}
+                display="inline"
+                onChange={(event, selected) => {
+                  handleSchedulerChange(event, selected);
+                  setSchedulerStep(null);
+                }}
+              />
+            ) : null}
+            {Platform.OS === "android" && schedulerStep ? (
+              <DateTimePicker
+                value={scheduledFor ?? new Date()}
+                mode={schedulerStep}
+                minimumDate={new Date()}
+                display="default"
+                onChange={handleSchedulerChange}
+              />
+            ) : null}
+          </View>
+        ) : null}
 
         <LocationField
           label="Pickup location"
@@ -241,7 +397,11 @@ export default function CreateErrandScreen() {
 
         {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
 
-        <Button label="Post errand" onPress={handleSubmit} loading={isSubmitting} />
+        <Button
+          label={isEditMode ? "Save changes" : "Post errand"}
+          onPress={handleSubmit}
+          loading={isSubmitting}
+        />
       </ScrollView>
 
       <LocationPickerModal
@@ -256,7 +416,16 @@ export default function CreateErrandScreen() {
         }}
       />
 
-      <ErrandPostedModal visible={showSuccessModal} onDone={() => navigation.goBack()} />
+      <ErrandPostedModal
+        visible={showSuccessModal}
+        title={isEditMode ? "Errand updated!" : "Errand posted!"}
+        body={
+          isEditMode
+            ? "Your changes have been saved."
+            : "We're finding a runner near you. You'll get an update as soon as one accepts."
+        }
+        onDone={() => navigation.goBack()}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -292,6 +461,14 @@ function LocationField({
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: theme.colors.background },
   content: { padding: theme.spacing.lg, paddingBottom: theme.spacing.xxl },
+  loadFailedContainer: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+  },
   title: {
     fontSize: 26,
     fontFamily: theme.fonts.display,

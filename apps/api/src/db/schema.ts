@@ -59,6 +59,7 @@ export const errands = pgTable("errands", {
   runnerId: uuid("runner_id"),
   category: errandCategoryEnum("category").notNull(),
   urgency: errandUrgencyEnum("urgency").notNull(),
+  scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
   status: errandStatusEnum("status").notNull().default("pending_match"),
   pickup: jsonb("pickup").$type<GeoPoint>().notNull(),
   dropoff: jsonb("dropoff").$type<GeoPoint>().notNull(),

@@ -22,3 +22,13 @@ export const loginSchema = z.object({
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;
+
+export const updateProfileSchema = z
+  .object({
+    fullName: z.string().trim().min(2, "Full name is required"),
+    email: z.email("Enter a valid email address"),
+    gender: z.enum(["female", "male", "unspecified"]),
+  })
+  .partial();
+
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;

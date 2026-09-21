@@ -30,6 +30,8 @@ export interface Errand {
   runnerId?: string;
   category: ErrandCategory;
   urgency: ErrandUrgency;
+  /** ISO timestamp — required when urgency is "scheduled", unset for "asap". */
+  scheduledFor?: string;
   status: ErrandStatus;
   pickup: GeoPoint;
   dropoff: GeoPoint;
