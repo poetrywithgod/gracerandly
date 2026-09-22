@@ -9,6 +9,7 @@ interface PillSelectProps<T extends string> {
   value: T | null;
   onChange: (value: T) => void;
   error?: string;
+  disabled?: boolean;
 }
 
 export default function PillSelect<T extends string>({
@@ -17,6 +18,7 @@ export default function PillSelect<T extends string>({
   value,
   onChange,
   error,
+  disabled = false,
 }: PillSelectProps<T>) {
   return (
     <View style={styles.wrapper}>
@@ -28,7 +30,8 @@ export default function PillSelect<T extends string>({
             <Pressable
               key={opt.value}
               onPress={() => onChange(opt.value)}
-              style={[styles.pill, selected && styles.pillSelected]}
+              disabled={disabled}
+              style={[styles.pill, selected && styles.pillSelected, disabled && styles.pillDisabled]}
             >
               <Text style={[styles.pillText, selected && styles.pillTextSelected]}>
                 {opt.label}
@@ -62,6 +65,9 @@ const styles = StyleSheet.create({
   pillSelected: {
     backgroundColor: theme.colors.primary,
     borderColor: theme.colors.primary,
+  },
+  pillDisabled: {
+    opacity: 0.5,
   },
   pillText: {
     fontFamily: theme.fonts.uiMedium,

@@ -2,6 +2,9 @@ export type UserRole = "requester" | "runner" | "platform_admin" | "trust_safety
 
 export type Gender = "female" | "male" | "unspecified";
 
+/** A requester's self-reported availability — shown to runners on an active errand. */
+export type RequesterStatus = "available" | "busy" | "offline";
+
 export interface BaseUser {
   id: string;
   fullName: string;
@@ -16,6 +19,11 @@ export interface Requester extends BaseUser {
   role: "requester";
   gender: Gender;
   phoneVerified: boolean;
+  emailVerified: boolean;
+  /** Data URI (or hosted URL, once real object storage exists) — undefined until the user sets one. */
+  avatarUrl?: string;
+  bio?: string;
+  status: RequesterStatus;
 }
 
 export interface Guarantor {

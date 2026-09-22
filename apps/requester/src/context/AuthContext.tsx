@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import * as SecureStore from "expo-secure-store";
-import type { Gender, Requester } from "@gracerandly/shared-types";
+import type { Gender, Requester, RequesterStatus, VerificationChannel } from "@gracerandly/shared-types";
 import { apiFetch, ApiError } from "../lib/apiClient";
 
 const TOKEN_STORAGE_KEY = "gracerandly_auth_token";
@@ -23,6 +23,8 @@ export interface UpdateProfileDetails {
   fullName?: string;
   email?: string;
   gender?: Gender;
+  bio?: string;
+  status?: RequesterStatus;
 }
 
 interface AuthResponse {
@@ -32,6 +34,13 @@ interface AuthResponse {
 
 interface MeResponse {
   user: Requester;
+}
+
+export interface RequestVerificationResult {
+  sent: true;
+  destination: string;
+  /** Only present when the API's EXPOSE_DEV_VERIFICATION_CODES flag is on. */
+  devCode?: string;
 }
 
 interface AuthContextValue {
@@ -45,6 +54,9 @@ interface AuthContextValue {
   signUp: (details: SignUpDetails) => Promise<void>;
   signOut: () => Promise<void>;
   updateProfile: (details: UpdateProfileDetails) => Promise<void>;
+  updateAvatar: (imageDataUri: string | null) => Promise<void>;
+  requestVerification: (channel: VerificationChannel) => Promise<RequestVerificationResult>;
+  confirmVerification: (channel: VerificationChannel, code: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -160,6 +172,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
+  const updateAvatar = useCallback(
+    async (imageDataUri: string | null) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const response = await apiFetch<MeResponse>("/auth/me/avatar", {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ image: imageDataUri }),
+        });
+        setUser(response.user);
+      } catch (err) {
+        setError(readableError(err));
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [token]
+  );
+
+  const requestVerification = useCallback(
+    async (channel: VerificationChannel) => {
+      // Deliberately doesn't touch isLoading/error — this drives a small
+      // inline modal that manages its own loading/error state, and
+      // shouldn't flip the whole screen into AuthContext's loading state.
+      return apiFetch<RequestVerificationResult>("/auth/verify/request", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ channel }),
+      });
+    },
+    [token]
+  );
+
+  const confirmVerification = useCallback(
+    async (channel: VerificationChannel, code: string) => {
+      const response = await apiFetch<MeResponse>("/auth/verify/confirm", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ channel, code }),
+      });
+      setUser(response.user);
+    },
+    [token]
+  );
+
   const value = useMemo(
     () => ({
       isAuthenticated,
@@ -172,6 +231,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       updateProfile,
+      updateAvatar,
+      requestVerification,
+      confirmVerification,
     }),
     [
       isAuthenticated,
@@ -184,6 +246,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       updateProfile,
+      updateAvatar,
+      requestVerification,
+      confirmVerification,
     ]
   );
 

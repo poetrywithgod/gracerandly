@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { View, Text, ScrollView, Alert, StyleSheet } from "react-native";
+import { View, Text, ScrollView, StyleSheet } from "react-native";
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
@@ -8,6 +8,7 @@ import Button from "../components/Button";
 import LoadingScreen from "../components/LoadingScreen";
 import ErrandPostedModal from "../components/ErrandPostedModal";
 import LiveTrackingMap from "../components/LiveTrackingMap";
+import ConfirmModal from "../components/ConfirmModal";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
 import type { MainStackParamList } from "../navigation/types";
@@ -86,6 +87,8 @@ export default function ErrandDetailScreen() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [showCancelledModal, setShowCancelledModal] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -116,23 +119,23 @@ export default function ErrandDetailScreen() {
   }, [errand?.status, load]);
 
   function confirmCancel() {
-    Alert.alert("Cancel this errand?", "This can't be undone.", [
-      { text: "Keep errand", style: "cancel" },
-      { text: "Cancel errand", style: "destructive", onPress: handleCancel },
-    ]);
+    setCancelError(null);
+    setShowCancelConfirm(true);
   }
 
   async function handleCancel() {
     setIsCancelling(true);
+    setCancelError(null);
     try {
       const response = await apiFetch<{ errand: Errand }>(`/errands/${errandId}/cancel`, {
         method: "PATCH",
         headers: { Authorization: `Bearer ${token}` },
       });
       setErrand(response.errand);
+      setShowCancelConfirm(false);
       setShowCancelledModal(true);
     } catch (err) {
-      Alert.alert("Couldn't cancel", err instanceof ApiError ? err.message : "Something went wrong");
+      setCancelError(err instanceof ApiError ? err.message : "Something went wrong");
     } finally {
       setIsCancelling(false);
     }
@@ -230,6 +233,18 @@ export default function ErrandDetailScreen() {
           setShowCancelledModal(false);
           navigation.goBack();
         }}
+      />
+
+      <ConfirmModal
+        visible={showCancelConfirm}
+        title="Cancel this errand?"
+        body={cancelError ?? "This can't be undone."}
+        confirmLabel="Cancel errand"
+        cancelLabel="Keep errand"
+        destructive
+        isConfirming={isCancelling}
+        onConfirm={handleCancel}
+        onCancel={() => setShowCancelConfirm(false)}
       />
     </ScrollView>
   );

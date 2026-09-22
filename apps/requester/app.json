@@ -29,6 +29,13 @@
         {
           "locationAlwaysAndWhenInUsePermission": "Gracerandly uses your location to set pickup and drop-off points for your errands."
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Gracerandly uses your photos to set your profile picture.",
+          "cameraPermission": "Gracerandly uses your camera to take a profile picture."
+        }
       ]
     ]
   }

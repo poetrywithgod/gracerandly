@@ -3,7 +3,7 @@ import { getTheme } from "@gracerandly/theme";
 
 const theme = getTheme("light");
 
-type Variant = "primary" | "secondary" | "ghost";
+type Variant = "primary" | "secondary" | "ghost" | "danger";
 
 interface ButtonProps {
   label: string;
@@ -74,4 +74,5 @@ const variantStyles: Record<Variant, ViewStyle> = {
   primary: { backgroundColor: theme.colors.primary },
   secondary: { backgroundColor: theme.colors.accent },
   ghost: { backgroundColor: "transparent" },
+  danger: { backgroundColor: theme.colors.danger },
 };

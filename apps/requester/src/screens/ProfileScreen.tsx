@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { View, Text, ScrollView, StyleSheet, RefreshControl, Alert } from "react-native";
+import { View, Text, Image, ScrollView, StyleSheet, RefreshControl, Pressable } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   Phone,
@@ -9,13 +9,17 @@ import {
   Package,
   CheckCircle2,
   Wallet,
+  Camera,
 } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
-import type { Errand, Gender } from "@gracerandly/shared-types";
+import type { Errand, Gender, RequesterStatus, VerificationChannel } from "@gracerandly/shared-types";
 import Button from "../components/Button";
 import TextField from "../components/TextField";
 import PillSelect from "../components/PillSelect";
 import { SkeletonBlock } from "../components/Skeleton";
+import ConfirmModal from "../components/ConfirmModal";
+import AvatarPickerModal from "../components/AvatarPickerModal";
+import VerificationModal from "../components/VerificationModal";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
 
@@ -33,6 +37,20 @@ const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: "unspecified", label: "Prefer not to say" },
 ];
 
+const STATUS_OPTIONS: { value: RequesterStatus; label: string }[] = [
+  { value: "available", label: "Available" },
+  { value: "busy", label: "Busy" },
+  { value: "offline", label: "Offline" },
+];
+
+const STATUS_COLORS: Record<RequesterStatus, string> = {
+  available: theme.colors.success,
+  busy: theme.colors.warning,
+  offline: theme.colors.textMuted,
+};
+
+const MAX_BIO_LENGTH = 280;
+
 function formatMemberSince(iso: string): string {
   return new Date(iso).toLocaleDateString("en-NG", { month: "long", year: "numeric" });
 }
@@ -42,18 +60,29 @@ function formatNaira(amount: number): string {
 }
 
 export default function ProfileScreen() {
-  const { user, token, signOut, updateProfile } = useAuth();
+  const { user, token, signOut, updateProfile, updateAvatar } = useAuth();
 
   const [isEditing, setIsEditing] = useState(false);
   const [fullName, setFullName] = useState(user?.fullName ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
   const [gender, setGender] = useState<Gender | null>(user?.gender ?? null);
+  const [bio, setBio] = useState(user?.bio ?? "");
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const [isSavingStatus, setIsSavingStatus] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
 
   const [errands, setErrands] = useState<Errand[] | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
+
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
+  const [showAvatarPicker, setShowAvatarPicker] = useState(false);
+  const [isSavingAvatar, setIsSavingAvatar] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+
+  const [verifyingChannel, setVerifyingChannel] = useState<VerificationChannel | null>(null);
 
   const loadStats = useCallback(
     async (isRefresh = false) => {
@@ -90,6 +119,7 @@ export default function ProfileScreen() {
     setFullName(user?.fullName ?? "");
     setEmail(user?.email ?? "");
     setGender(user?.gender ?? null);
+    setBio(user?.bio ?? "");
     setFormError(null);
     setIsEditing(true);
   }
@@ -106,6 +136,7 @@ export default function ProfileScreen() {
         fullName: fullName.trim(),
         email: email.trim() || undefined,
         gender: gender ?? undefined,
+        bio,
       });
       setIsEditing(false);
     } catch (err) {
@@ -115,11 +146,34 @@ export default function ProfileScreen() {
     }
   }
 
-  function handleSignOutPress() {
-    Alert.alert("Sign out?", "You'll need to log in again to continue.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Sign out", style: "destructive", onPress: signOut },
-    ]);
+  async function handleStatusChange(status: RequesterStatus) {
+    if (status === user?.status) return;
+    setIsSavingStatus(true);
+    setStatusError(null);
+    try {
+      await updateProfile({ status });
+    } catch (err) {
+      setStatusError(err instanceof ApiError ? err.message : "Couldn't update status");
+    } finally {
+      setIsSavingStatus(false);
+    }
+  }
+
+  async function handleAvatarSelect(imageDataUri: string | null) {
+    setShowAvatarPicker(false);
+    setIsSavingAvatar(true);
+    setAvatarError(null);
+    try {
+      await updateAvatar(imageDataUri);
+    } catch (err) {
+      setAvatarError(err instanceof ApiError ? err.message : "Couldn't update your photo");
+    } finally {
+      setIsSavingAvatar(false);
+    }
+  }
+
+  async function handleSignOut() {
+    await signOut();
   }
 
   return (
@@ -130,9 +184,23 @@ export default function ProfileScreen() {
         <RefreshControl refreshing={isRefreshing} onRefresh={() => loadStats(true)} />
       }
     >
-      <View style={styles.avatar}>
-        <Text style={styles.avatarInitial}>{user?.fullName.charAt(0).toUpperCase() ?? "?"}</Text>
-      </View>
+      <Pressable
+        style={styles.avatarWrapper}
+        onPress={() => setShowAvatarPicker(true)}
+        disabled={isSavingAvatar}
+      >
+        <View style={styles.avatar}>
+          {user?.avatarUrl ? (
+            <Image source={{ uri: user.avatarUrl }} style={styles.avatarImage} />
+          ) : (
+            <Text style={styles.avatarInitial}>{user?.fullName.charAt(0).toUpperCase() ?? "?"}</Text>
+          )}
+        </View>
+        <View style={styles.avatarEditBadge}>
+          <Camera size={14} color={theme.colors.textOnPrimary} />
+        </View>
+      </Pressable>
+      {avatarError ? <Text style={styles.errorText}>{avatarError}</Text> : null}
 
       {isEditing ? (
         <View style={styles.editForm}>
@@ -154,6 +222,14 @@ export default function ProfileScreen() {
             options={GENDER_OPTIONS}
             value={gender}
             onChange={setGender}
+          />
+          <TextField
+            label={`Bio (${bio.length}/${MAX_BIO_LENGTH})`}
+            value={bio}
+            onChangeText={(text) => setBio(text.slice(0, MAX_BIO_LENGTH))}
+            multiline
+            numberOfLines={3}
+            placeholder="Tell runners a bit about yourself"
           />
           {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
           <View style={styles.editActions}>
@@ -177,6 +253,18 @@ export default function ProfileScreen() {
           {user ? (
             <Text style={styles.memberSince}>Member since {formatMemberSince(user.createdAt)}</Text>
           ) : null}
+          {user?.bio ? <Text style={styles.bio}>{user.bio}</Text> : null}
+
+          <View style={styles.statusRow}>
+            <PillSelect
+              label="Availability"
+              options={STATUS_OPTIONS}
+              value={user?.status ?? null}
+              onChange={handleStatusChange}
+              disabled={isSavingStatus}
+            />
+          </View>
+          {statusError ? <Text style={styles.errorText}>{statusError}</Text> : null}
 
           <View style={styles.statsRow}>
             <StatTile
@@ -202,11 +290,21 @@ export default function ProfileScreen() {
               icon={<Phone size={16} color={theme.colors.textMuted} />}
               label="Phone"
               value={user?.phone ?? "—"}
+              action={
+                user && !user.phoneVerified
+                  ? { label: "Verify", onPress: () => setVerifyingChannel("phone") }
+                  : undefined
+              }
             />
             <InfoRow
               icon={<Mail size={16} color={theme.colors.textMuted} />}
               label="Email"
               value={user?.email ?? "Not provided"}
+              action={
+                user?.email && !user.emailVerified
+                  ? { label: "Verify", onPress: () => setVerifyingChannel("email") }
+                  : undefined
+              }
             />
             <InfoRow
               icon={
@@ -227,6 +325,17 @@ export default function ProfileScreen() {
               }
               label="Phone verified"
               value={user?.phoneVerified ? "Yes" : "Not yet"}
+            />
+            <InfoRow
+              icon={
+                user?.emailVerified ? (
+                  <ShieldCheck size={16} color={theme.colors.success} />
+                ) : (
+                  <ShieldAlert size={16} color={theme.colors.warning} />
+                )
+              }
+              label="Email verified"
+              value={user?.emailVerified ? "Yes" : user?.email ? "Not yet" : "No email on file"}
               last
             />
           </View>
@@ -240,11 +349,39 @@ export default function ProfileScreen() {
           <Button
             label="Sign out"
             variant="ghost"
-            onPress={handleSignOutPress}
+            onPress={() => setShowSignOutConfirm(true)}
             style={styles.signOutButton}
           />
         </>
       )}
+
+      <ConfirmModal
+        visible={showSignOutConfirm}
+        title="Sign out?"
+        body="You'll need to log in again to continue."
+        confirmLabel="Sign out"
+        cancelLabel="Cancel"
+        destructive
+        onConfirm={handleSignOut}
+        onCancel={() => setShowSignOutConfirm(false)}
+      />
+
+      <AvatarPickerModal
+        visible={showAvatarPicker}
+        hasAvatar={Boolean(user?.avatarUrl)}
+        onSelect={handleAvatarSelect}
+        onClose={() => setShowAvatarPicker(false)}
+      />
+
+      {verifyingChannel && user ? (
+        <VerificationModal
+          visible
+          channel={verifyingChannel}
+          destination={verifyingChannel === "phone" ? user.phone : (user.email ?? "")}
+          onClose={() => setVerifyingChannel(null)}
+          onVerified={() => setVerifyingChannel(null)}
+        />
+      ) : null}
     </ScrollView>
   );
 }
@@ -277,11 +414,13 @@ function InfoRow({
   icon,
   label,
   value,
+  action,
   last,
 }: {
   icon?: React.ReactNode;
   label: string;
   value: string;
+  action?: { label: string; onPress: () => void };
   last?: boolean;
 }) {
   return (
@@ -290,7 +429,14 @@ function InfoRow({
         {icon ? <View style={styles.infoIcon}>{icon}</View> : null}
         <Text style={styles.infoLabel}>{label}</Text>
       </View>
-      <Text style={styles.infoValue}>{value}</Text>
+      <View style={styles.infoValueGroup}>
+        <Text style={styles.infoValue}>{value}</Text>
+        {action ? (
+          <Pressable onPress={action.onPress} hitSlop={8}>
+            <Text style={styles.infoAction}>{action.label}</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -301,6 +447,10 @@ const styles = StyleSheet.create({
     padding: theme.spacing.lg,
     alignItems: "center",
   },
+  avatarWrapper: {
+    marginTop: theme.spacing.lg,
+    marginBottom: theme.spacing.sm,
+  },
   avatar: {
     width: 72,
     height: 72,
@@ -308,13 +458,26 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: theme.spacing.lg,
-    marginBottom: theme.spacing.sm,
+    overflow: "hidden",
   },
+  avatarImage: { width: "100%", height: "100%" },
   avatarInitial: {
     fontFamily: theme.fonts.display,
     fontSize: 28,
     color: theme.colors.textOnPrimary,
+  },
+  avatarEditBadge: {
+    position: "absolute",
+    bottom: 0,
+    right: -2,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: theme.colors.primaryDark,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: theme.colors.background,
   },
   name: {
     fontFamily: theme.fonts.uiSemibold,
@@ -325,7 +488,18 @@ const styles = StyleSheet.create({
     fontFamily: theme.fonts.ui,
     fontSize: 13,
     color: theme.colors.textMuted,
-    marginBottom: theme.spacing.lg,
+  },
+  bio: {
+    fontFamily: theme.fonts.ui,
+    fontSize: 14,
+    color: theme.colors.text,
+    textAlign: "center",
+    marginTop: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+  },
+  statusRow: {
+    alignSelf: "stretch",
+    marginTop: theme.spacing.md,
   },
   statsRow: {
     flexDirection: "row",
@@ -383,10 +557,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: theme.colors.textMuted,
   },
+  infoValueGroup: { flexDirection: "row", alignItems: "center", gap: 10 },
   infoValue: {
     fontFamily: theme.fonts.uiMedium,
     fontSize: 14,
     color: theme.colors.text,
+  },
+  infoAction: {
+    fontFamily: theme.fonts.uiSemibold,
+    fontSize: 13,
+    color: theme.colors.primary,
   },
   genderGlyph: {
     fontFamily: theme.fonts.uiSemibold,
