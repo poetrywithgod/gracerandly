@@ -1,12 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Modal, View, Text, StyleSheet, Platform } from "react-native";
+import {
+  Modal,
+  View,
+  Text,
+  TextInput,
+  FlatList,
+  Pressable,
+  ActivityIndicator,
+  Keyboard,
+  StyleSheet,
+  Platform,
+} from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
-import { MapPin, X } from "lucide-react-native";
+import { MapPin, Search, X } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { GeoPoint } from "@gracerandly/shared-types";
 import Button from "./Button";
 import { getCurrentCoordinate, reverseGeocode, LocationPermissionDeniedError } from "../lib/location";
+import { searchAddress, type PlaceSuggestion } from "../lib/routing";
 import { LEAFLET_JS, LEAFLET_CSS } from "../lib/leafletAssets";
+
+const SEARCH_DEBOUNCE_MS = 400;
 
 const theme = getTheme("light");
 
@@ -96,6 +110,12 @@ export default function LocationPickerModal({
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
 
+  const [searchQuery, setSearchQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const recenterMap = useCallback((coordinate: Coordinate, zoom = FOCUSED_ZOOM) => {
     webviewRef.current?.injectJavaScript(
       `if (window.map) { window.map.setView([${coordinate.latitude}, ${coordinate.longitude}], ${zoom}); }
@@ -120,6 +140,8 @@ export default function LocationPickerModal({
     setRegion(coordinate);
     setAddress(initial?.address);
     setLocationError(null);
+    setSearchQuery("");
+    setSuggestions([]);
     if (isMapReady) {
       recenterMap(coordinate, initial ? FOCUSED_ZOOM : DEFAULT_ZOOM);
     }
@@ -156,6 +178,53 @@ export default function LocationPickerModal({
     handleUseCurrentLocation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, isMapReady]);
+
+  // Debounced address-as-you-type search. Nominatim's fair-use policy is
+  // ~1 request/second, so we wait for a pause in typing and cancel any
+  // still-in-flight request before firing the next one, rather than
+  // firing on every keystroke.
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchAbortRef.current?.abort();
+
+    const trimmed = searchQuery.trim();
+    if (trimmed.length < 3) {
+      setSuggestions([]);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    searchDebounceRef.current = setTimeout(() => {
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
+      searchAddress(trimmed, region, controller.signal)
+        .then(setSuggestions)
+        .catch((err) => {
+          if (err instanceof Error && err.name === "AbortError") return;
+          setSuggestions([]);
+        })
+        .finally(() => setIsSearching(false));
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+    // `region` intentionally excluded — search should bias toward wherever
+    // the pin is when the user *starts* typing, not refire as it moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
+
+  function handleSelectSuggestion(suggestion: PlaceSuggestion) {
+    const coordinate = { latitude: suggestion.latitude, longitude: suggestion.longitude };
+    setRegion(coordinate);
+    setAddress(suggestion.label);
+    recenterMap(coordinate);
+    setSuggestions([]);
+    setSearchQuery("");
+    setLocationError(null);
+    Keyboard.dismiss();
+  }
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -199,16 +268,49 @@ export default function LocationPickerModal({
           </View>
         </View>
 
-        <WebView
-          ref={webviewRef}
-          style={styles.map}
-          originWhitelist={["*"]}
-          source={{ html: mapHtml }}
-          onMessage={handleMessage}
-        />
+        <View style={styles.mapContainer}>
+          <WebView
+            ref={webviewRef}
+            style={styles.map}
+            originWhitelist={["*"]}
+            source={{ html: mapHtml }}
+            onMessage={handleMessage}
+          />
 
-        <View style={styles.centerPin} pointerEvents="none">
-          <MapPin size={36} color={theme.colors.primary} fill={theme.colors.accent} />
+          <View style={styles.searchWrapper} pointerEvents="box-none">
+            <View style={styles.searchBar}>
+              <Search size={18} color={theme.colors.textMuted} />
+              <TextInput
+                style={styles.searchInput}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search for an address"
+                placeholderTextColor={theme.colors.textMuted}
+                returnKeyType="search"
+              />
+              {isSearching ? <ActivityIndicator size="small" color={theme.colors.primary} /> : null}
+            </View>
+            {suggestions.length > 0 ? (
+              <FlatList
+                style={styles.suggestionsList}
+                data={suggestions}
+                keyExtractor={(item) => item.id}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => (
+                  <Pressable style={styles.suggestionRow} onPress={() => handleSelectSuggestion(item)}>
+                    <MapPin size={16} color={theme.colors.primary} />
+                    <Text style={styles.suggestionText} numberOfLines={2}>
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                )}
+              />
+            ) : null}
+          </View>
+
+          <View style={styles.centerPin} pointerEvents="none">
+            <MapPin size={36} color={theme.colors.primary} fill={theme.colors.accent} />
+          </View>
         </View>
 
         <View style={styles.bottomSheet}>
@@ -266,7 +368,60 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  mapContainer: { flex: 1 },
   map: { flex: 1 },
+  searchWrapper: {
+    position: "absolute",
+    top: theme.spacing.md,
+    left: theme.spacing.md,
+    right: theme.spacing.md,
+  },
+  searchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  searchInput: {
+    flex: 1,
+    fontFamily: theme.fonts.uiMedium,
+    fontSize: 15,
+    color: theme.colors.text,
+  },
+  suggestionsList: {
+    marginTop: 6,
+    maxHeight: 220,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.md,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  suggestionRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  suggestionText: {
+    flex: 1,
+    fontFamily: theme.fonts.uiMedium,
+    fontSize: 14,
+    color: theme.colors.text,
+  },
   centerPin: {
     position: "absolute",
     top: "50%",

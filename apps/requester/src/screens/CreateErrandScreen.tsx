@@ -18,6 +18,7 @@ import Button from "../components/Button";
 import TextField from "../components/TextField";
 import PillSelect from "../components/PillSelect";
 import LocationPickerModal from "../components/LocationPickerModal";
+import RoutePreview from "../components/RoutePreview";
 import ErrandPostedModal from "../components/ErrandPostedModal";
 import LoadingScreen from "../components/LoadingScreen";
 import { useAuth } from "../context/AuthContext";
@@ -335,6 +336,8 @@ export default function CreateErrandScreen() {
           error={errors.dropoff}
           onPress={() => setActiveField("dropoff")}
         />
+
+        {pickup && dropoff ? <RoutePreview pickup={pickup} dropoff={dropoff} /> : null}
 
         <View style={styles.itemsSection}>
           <Text style={styles.sectionLabel}>Items</Text>
