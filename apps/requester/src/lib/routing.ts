@@ -192,6 +192,22 @@ export async function getFastestRouteWithEstimates(
   return { route: driving, estimates };
 }
 
+/**
+ * Lighter-weight than getFastestRouteWithEstimates: just the driving ETA
+ * from one point to another, with no foot leg fetched alongside it.
+ * Built for LiveTrackingMap's periodic "distance/time to next waypoint"
+ * recalculation, where firing two OSRM requests per tick would waste
+ * budget against the public router's ~1 req/sec fair-use limit.
+ */
+export async function getEtaToPoint(
+  from: Coordinate,
+  to: Coordinate,
+  signal?: AbortSignal
+): Promise<{ distanceMeters: number; durationSeconds: number }> {
+  const route = await fetchOsrmRoute(from, to, "driving", signal);
+  return { distanceMeters: route.distanceMeters, durationSeconds: route.durationSeconds };
+}
+
 export function formatDuration(seconds: number): string {
   const minutes = Math.round(seconds / 60);
   if (minutes < 1) return "<1 min";

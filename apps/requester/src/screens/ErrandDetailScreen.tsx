@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { View, Text, ScrollView, Alert, StyleSheet } from "react-native";
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -7,6 +7,7 @@ import type { Errand, ErrandStatus } from "@gracerandly/shared-types";
 import Button from "../components/Button";
 import LoadingScreen from "../components/LoadingScreen";
 import ErrandPostedModal from "../components/ErrandPostedModal";
+import LiveTrackingMap from "../components/LiveTrackingMap";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
 import type { MainStackParamList } from "../navigation/types";
@@ -55,6 +56,24 @@ function formatDateTime(iso: string): string {
   });
 }
 
+// Statuses where a runner is actively out on the errand and live tracking
+// is meaningful to show. pending_match (no runner yet), delivered and
+// cancelled are all "nothing to track" states.
+const TRACKED_STATUSES: ReadonlySet<ErrandStatus> = new Set([
+  "accepted",
+  "en_route_to_pickup",
+  "in_progress",
+  "en_route_to_delivery",
+]);
+
+// How often to re-fetch the errand while it's in an actively-tracked
+// status, so the status pill (and the leg LiveTrackingMap is tracking)
+// updates without the requester needing to leave and return to this
+// screen. Status transitions themselves come from polling, not realtime —
+// only the runner's position is pushed live; that's a reasonable split for
+// now since transitions are infrequent compared to position updates.
+const STATUS_POLL_INTERVAL_MS = 5000;
+
 type DetailRouteProp = RouteProp<MainStackParamList, "ErrandDetail">;
 
 export default function ErrandDetailScreen() {
@@ -87,6 +106,14 @@ export default function ErrandDetailScreen() {
       load();
     }, [load])
   );
+
+  // Light polling while a runner is actively out on the errand, so the
+  // status pill (and which leg the live map tracks) updates on its own.
+  useEffect(() => {
+    if (!errand || !TRACKED_STATUSES.has(errand.status)) return;
+    const interval = setInterval(load, STATUS_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [errand?.status, load]);
 
   function confirmCancel() {
     Alert.alert("Cancel this errand?", "This can't be undone.", [
@@ -134,6 +161,15 @@ export default function ErrandDetailScreen() {
         </View>
         <Text style={styles.cost}>{formatNaira(errand.estimatedCost)}</Text>
       </View>
+
+      {TRACKED_STATUSES.has(errand.status) ? (
+        <LiveTrackingMap
+          errandId={errand.id}
+          pickup={errand.pickup}
+          dropoff={errand.dropoff}
+          status={errand.status}
+        />
+      ) : null}
 
       <Text style={styles.category}>{CATEGORY_LABELS[errand.category]}</Text>
       <Text style={styles.meta}>Posted {formatDateTime(errand.createdAt)}</Text>
