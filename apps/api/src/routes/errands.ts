@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomInt } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
@@ -40,9 +40,19 @@ function toErrand(row: typeof errands.$inferSelect): Errand {
   };
 }
 
+/**
+ * A 4-digit code the requester reads aloud to the runner at handoff to
+ * confirm they're at the right person/door — like Uber/Bolt's delivery
+ * PIN. Generated once at creation (there's no "runner accepts" endpoint
+ * yet to hook this to instead) and only meaningful once matched; the
+ * requester app only surfaces it from that point on.
+ */
+function generateDeliveryPin(): string {
+  return randomInt(0, 10000).toString().padStart(4, "0");
+}
+
 /** Loads an errand by id, scoped to the current requester, or throws 404. */
-async function loadOwnErrand(id: unknown, requesterId: string) {
-  const idResult = z.uuid().safeParse(id);
+async function loadOwnErrand(id: unknown, requesterId: string) {  const idResult = z.uuid().safeParse(id);
   if (!idResult.success) {
     throw AppErrors.notFound("Errand not found");
   }
@@ -79,6 +89,7 @@ router.post(
         recurrenceRule: input.recurrenceRule,
         estimatedCost: input.estimatedCost,
         aiParsed: input.aiParsed ?? false,
+        deliveryPin: generateDeliveryPin(),
       })
       .returning();
 

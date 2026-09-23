@@ -22,6 +22,9 @@
  * status transitions gated by actual pickup verification (geofence-
  * unlocked photo confirm, not a timer — see the pickup-proof discussion
  * this was built alongside) rather than walking the route unconditionally.
+ * The one gate that *is* real: marking "delivered" requires the errand's
+ * deliveryPin, the same way a real runner would need the code the
+ * requester reads out at handoff (see --pin below).
  */
 import "dotenv/config";
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
@@ -40,15 +43,19 @@ interface LatLng {
 
 type ErrandStatus = typeof errands.$inferSelect.status;
 
-function parseArgs(): { errandId: string } {
+function parseArgs(): { errandId: string; pin?: string } {
   const args = process.argv.slice(2);
   const idx = args.indexOf("--errand");
   const errandId = idx !== -1 ? args[idx + 1] : undefined;
   if (!errandId) {
-    console.error("Usage: pnpm --filter @gracerandly/api fake-runner -- --errand <errandId>");
+    console.error(
+      "Usage: pnpm --filter @gracerandly/api fake-runner -- --errand <errandId> [--pin <deliveryPin>]"
+    );
     process.exit(1);
   }
-  return { errandId };
+  const pinIdx = args.indexOf("--pin");
+  const pin = pinIdx !== -1 ? args[pinIdx + 1] : undefined;
+  return { errandId, pin };
 }
 
 async function fetchOsrmRoute(from: LatLng, to: LatLng): Promise<LatLng[]> {
@@ -128,7 +135,7 @@ async function walkRoute(route: LatLng[], channel: RealtimeChannel) {
 }
 
 async function main() {
-  const { errandId } = parseArgs();
+  const { errandId, pin } = parseArgs();
 
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
@@ -177,6 +184,18 @@ async function main() {
   await walkRoute(toDropoff, channel);
 
   console.log("Arrived at drop-off");
+  if (errand.deliveryPin) {
+    if (pin !== errand.deliveryPin) {
+      console.error(
+        `\nDelivery requires the PIN shown in the requester's app. ${
+          pin ? "The --pin you gave doesn't match." : "Rerun with --pin <code>."
+        }`
+      );
+      await supabase.removeChannel(channel);
+      process.exit(1);
+    }
+    console.log("PIN confirmed");
+  }
   await setStatus(errandId, "delivered");
 
   await supabase.removeChannel(channel);

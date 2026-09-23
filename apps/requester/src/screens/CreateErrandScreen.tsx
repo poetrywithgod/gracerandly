@@ -41,6 +41,20 @@ const URGENCY_OPTIONS: { value: ErrandUrgency; label: string }[] = [
   { value: "scheduled", label: "Scheduled" },
 ];
 
+type RepeatMode = "once" | "repeat";
+
+const REPEAT_MODE_OPTIONS: { value: RepeatMode; label: string }[] = [
+  { value: "once", label: "One-time" },
+  { value: "repeat", label: "Repeats" },
+];
+
+const RECURRENCE_OPTIONS: { value: string; label: string }[] = [
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "biweekly", label: "Every 2 weeks" },
+  { value: "monthly", label: "Monthly" },
+];
+
 interface DraftItem {
   key: string;
   name: string;
@@ -92,6 +106,8 @@ export default function CreateErrandScreen() {
   const [estimatedCost, setEstimatedCost] = useState("");
   const [aiParsed, setAiParsed] = useState(false);
   const [showAiParse, setShowAiParse] = useState(false);
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>("once");
+  const [recurrenceRule, setRecurrenceRule] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -127,6 +143,8 @@ export default function CreateErrandScreen() {
         );
         setInstructions(errand.instructions ?? "");
         setEstimatedCost(String(errand.estimatedCost));
+        setRepeatMode(errand.isRecurring ? "repeat" : "once");
+        setRecurrenceRule(errand.recurrenceRule ?? null);
       } catch {
         if (!cancelled) setLoadFailed(true);
       } finally {
@@ -174,6 +192,9 @@ export default function CreateErrandScreen() {
     if (urgency === "scheduled" && !scheduledFor) {
       nextErrors.scheduledFor = "Set a time for this errand";
     }
+    if (repeatMode === "repeat" && !recurrenceRule) {
+      nextErrors.recurrenceRule = "Choose how often this repeats";
+    }
     if (!pickup) nextErrors.pickup = "Set a pickup location";
     if (!dropoff) nextErrors.dropoff = "Set a drop-off location";
 
@@ -210,6 +231,8 @@ export default function CreateErrandScreen() {
           })),
         instructions: instructions.trim() || undefined,
         estimatedCost: Math.round(Number(estimatedCost)),
+        isRecurring: repeatMode === "repeat",
+        recurrenceRule: repeatMode === "repeat" ? (recurrenceRule ?? undefined) : undefined,
         ...(!isEditMode && aiParsed && { aiParsed: true }),
       };
 
@@ -349,6 +372,29 @@ export default function CreateErrandScreen() {
                 onChange={handleSchedulerChange}
               />
             ) : null}
+          </View>
+        ) : null}
+
+        <PillSelect
+          label="Repeat"
+          options={REPEAT_MODE_OPTIONS}
+          value={repeatMode}
+          onChange={setRepeatMode}
+        />
+
+        {repeatMode === "repeat" ? (
+          <View style={styles.locationFieldWrapper}>
+            <PillSelect
+              label="How often"
+              options={RECURRENCE_OPTIONS}
+              value={recurrenceRule}
+              onChange={setRecurrenceRule}
+              error={errors.recurrenceRule}
+            />
+            <Text style={styles.recurrenceHint}>
+              We'll remember this, but repeat errands aren't posted automatically yet — you'll
+              still need to post each one.
+            </Text>
           </View>
         ) : null}
 
@@ -543,6 +589,12 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   locationFieldWrapper: { marginBottom: theme.spacing.md },
+  recurrenceHint: {
+    fontFamily: theme.fonts.ui,
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    marginTop: 4,
+  },
   locationField: {
     flexDirection: "row",
     alignItems: "center",

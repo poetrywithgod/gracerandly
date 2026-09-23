@@ -4,6 +4,7 @@ import { useFocusEffect, useNavigation, useRoute, type RouteProp } from "@react-
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
 import type { Errand, ErrandStatus } from "@gracerandly/shared-types";
+import { KeyRound } from "lucide-react-native";
 import Button from "../components/Button";
 import LoadingScreen from "../components/LoadingScreen";
 import ErrandPostedModal from "../components/ErrandPostedModal";
@@ -174,6 +175,17 @@ export default function ErrandDetailScreen() {
         />
       ) : null}
 
+      {TRACKED_STATUSES.has(errand.status) && errand.deliveryPin ? (
+        <View style={styles.pinCard}>
+          <View style={styles.pinTopRow}>
+            <KeyRound size={18} color={theme.colors.primaryDark} />
+            <Text style={styles.pinLabel}>Delivery PIN</Text>
+            <Text style={styles.pinValue}>{errand.deliveryPin}</Text>
+          </View>
+          <Text style={styles.pinHint}>Give this to your runner when they arrive</Text>
+        </View>
+      ) : null}
+
       <Text style={styles.category}>{CATEGORY_LABELS[errand.category]}</Text>
       <Text style={styles.meta}>Posted {formatDateTime(errand.createdAt)}</Text>
       {errand.urgency === "scheduled" && errand.scheduledFor ? (
@@ -295,6 +307,37 @@ const styles = StyleSheet.create({
     fontFamily: theme.fonts.display,
     fontSize: 24,
     color: theme.colors.text,
+  },
+  pinCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    padding: theme.spacing.md,
+    marginTop: theme.spacing.md,
+  },
+  pinTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  pinLabel: {
+    fontFamily: theme.fonts.uiMedium,
+    fontSize: 13,
+    color: theme.colors.textMuted,
+    flex: 1,
+  },
+  pinValue: {
+    fontFamily: theme.fonts.display,
+    fontSize: 22,
+    letterSpacing: 4,
+    color: theme.colors.primaryDark,
+  },
+  pinHint: {
+    fontFamily: theme.fonts.ui,
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    marginTop: 4,
   },
   meta: {
     fontFamily: theme.fonts.ui,
