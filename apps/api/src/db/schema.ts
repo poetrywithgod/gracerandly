@@ -133,3 +133,46 @@ export const errands = pgTable("errands", {
 
 export type ErrandRow = typeof errands.$inferSelect;
 export type NewErrandRow = typeof errands.$inferInsert;
+
+// Mirrors packages/shared-types' TransactionStatus union (a subset of it —
+// "disbursed" belongs to the Runner-payout leg, which isn't wired up yet;
+// this MVP only ever reaches "escrowed", "released", "refunded", "failed").
+export const transactionStatusEnum = pgEnum("transaction_status", [
+  "pending",
+  "escrowed",
+  "disbursed",
+  "released",
+  "refunded",
+  "failed",
+]);
+
+// Mirrors packages/shared-types' EscrowTransaction interface.
+//
+// One row per payment attempt (not per errand — a failed attempt can be
+// retried, which creates a new row rather than overwriting the old one).
+// runnerId has no FK yet, same as errands.runnerId above — there's no
+// runners table until a real Runner app exists, so runnerPayout is
+// calculated and stored but never actually disbursed anywhere yet; only
+// the requester-facing pay-in (this table's real job right now) is live.
+export const escrowTransactions = pgTable("escrow_transactions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  errandId: uuid("errand_id")
+    .notNull()
+    .references(() => errands.id),
+  requesterId: uuid("requester_id")
+    .notNull()
+    .references(() => requesters.id),
+  runnerId: uuid("runner_id"),
+  amount: integer("amount").notNull(),
+  commissionAmount: integer("commission_amount").notNull(),
+  runnerPayout: integer("runner_payout").notNull(),
+  status: transactionStatusEnum("status").notNull().default("pending"),
+  // Paystack's transaction reference — handed to them at initialize time,
+  // matched back against at verify time (manual verify or their webhook).
+  providerReference: text("provider_reference").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  releasedAt: timestamp("released_at", { withTimezone: true }),
+});
+
+export type EscrowTransactionRow = typeof escrowTransactions.$inferSelect;
+export type NewEscrowTransactionRow = typeof escrowTransactions.$inferInsert;

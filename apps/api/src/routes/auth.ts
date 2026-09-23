@@ -1,5 +1,4 @@
 import { Router } from "express";
-import express from "express";
 import { eq, or } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { db } from "../db/client";
@@ -175,13 +174,13 @@ router.patch(
   })
 );
 
-// A separate route (rather than folding into PATCH /me) so its json body
-// limit can be raised just for this payload — the default 100kb elsewhere
-// is deliberately tight, base64 image data isn't.
+// A separate route from PATCH /me mainly for clarity (and so avatarUrl
+// updates get their own audit trail if one's ever added) — the body-size
+// consideration that used to justify the split now lives on the global
+// json() limit in server.ts instead.
 router.patch(
   "/me/avatar",
   requireAuth,
-  express.json({ limit: "3mb" }),
   asyncHandler(async (req, res) => {
     const input = updateAvatarSchema.parse(req.body);
 

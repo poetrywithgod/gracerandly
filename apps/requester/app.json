@@ -3,6 +3,7 @@
     "name": "Gracerandly",
     "slug": "gracerandly-requester",
     "version": "1.0.0",
+    "scheme": "gracerandly",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

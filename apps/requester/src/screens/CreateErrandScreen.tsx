@@ -11,7 +11,7 @@ import {
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { CalendarClock, MapPin, Plus, Trash2 } from "lucide-react-native";
+import { CalendarClock, MapPin, Plus, Sparkles, Trash2 } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { Errand, ErrandCategory, ErrandUrgency, GeoPoint } from "@gracerandly/shared-types";
 import Button from "../components/Button";
@@ -20,6 +20,7 @@ import PillSelect from "../components/PillSelect";
 import LocationPickerModal from "../components/LocationPickerModal";
 import RoutePreview from "../components/RoutePreview";
 import ErrandPostedModal from "../components/ErrandPostedModal";
+import AiParseModal, { type AiParsedDraft } from "../components/AiParseModal";
 import LoadingScreen from "../components/LoadingScreen";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
@@ -89,6 +90,8 @@ export default function CreateErrandScreen() {
   const [items, setItems] = useState<DraftItem[]>([newDraftItem()]);
   const [instructions, setInstructions] = useState("");
   const [estimatedCost, setEstimatedCost] = useState("");
+  const [aiParsed, setAiParsed] = useState(false);
+  const [showAiParse, setShowAiParse] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -148,6 +151,21 @@ export default function CreateErrandScreen() {
     setItems((prev) => (prev.length > 1 ? prev.filter((item) => item.key !== key) : prev));
   }
 
+  function handleAiParsed(draft: AiParsedDraft) {
+    setCategory(draft.category);
+    setItems(
+      draft.items.map((item) => ({
+        key: Math.random().toString(36).slice(2),
+        name: item.name,
+        quantity: String(item.quantity),
+        notes: item.notes ?? "",
+      }))
+    );
+    if (draft.instructions) setInstructions(draft.instructions);
+    setAiParsed(true);
+    setShowAiParse(false);
+  }
+
   function validate(): boolean {
     const nextErrors: Record<string, string> = {};
 
@@ -192,6 +210,7 @@ export default function CreateErrandScreen() {
           })),
         instructions: instructions.trim() || undefined,
         estimatedCost: Math.round(Number(estimatedCost)),
+        ...(!isEditMode && aiParsed && { aiParsed: true }),
       };
 
       await apiFetch<{ errand: Errand }>(isEditMode ? `/errands/${errandId}` : "/errands", {
@@ -261,6 +280,16 @@ export default function CreateErrandScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.title}>{isEditMode ? "Edit errand" : "Post an errand"}</Text>
+
+        {!isEditMode ? (
+          <Pressable onPress={() => setShowAiParse(true)} style={styles.aiEntryCard}>
+            <Sparkles size={18} color={theme.colors.primary} />
+            <View style={styles.aiEntryTextGroup}>
+              <Text style={styles.aiEntryTitle}>Fill with AI</Text>
+              <Text style={styles.aiEntrySubtitle}>Paste a list and we'll fill this in</Text>
+            </View>
+          </Pressable>
+        ) : null}
 
         <PillSelect
           label="Category"
@@ -419,6 +448,12 @@ export default function CreateErrandScreen() {
         }}
       />
 
+      <AiParseModal
+        visible={showAiParse}
+        onClose={() => setShowAiParse(false)}
+        onParsed={handleAiParsed}
+      />
+
       <ErrandPostedModal
         visible={showSuccessModal}
         title={isEditMode ? "Errand updated!" : "Errand posted!"}
@@ -483,6 +518,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: theme.colors.text,
     marginBottom: 8,
+  },
+  aiEntryCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.lg,
+  },
+  aiEntryTextGroup: { flex: 1 },
+  aiEntryTitle: {
+    fontFamily: theme.fonts.uiSemibold,
+    fontSize: 14,
+    color: theme.colors.text,
+  },
+  aiEntrySubtitle: {
+    fontFamily: theme.fonts.ui,
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    marginTop: 1,
   },
   locationFieldWrapper: { marginBottom: theme.spacing.md },
   locationField: {

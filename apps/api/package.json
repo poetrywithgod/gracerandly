@@ -17,6 +17,7 @@
     "fake-runner": "tsx scripts/fake-runner.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
     "@gracerandly/shared-types": "workspace:*",
     "@gracerandly/theme": "workspace:*",
     "bcryptjs": "^3.0.3",

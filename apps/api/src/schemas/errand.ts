@@ -25,6 +25,11 @@ const baseErrandFields = {
   isRecurring: z.boolean().default(false),
   recurrenceRule: z.string().trim().optional(),
   estimatedCost: z.number().int().positive("Estimated cost must be greater than 0"),
+  // True when the requester used the "parse with AI" entry point to draft
+  // this errand (even if they then edited the result) — set by the client
+  // on submit, not derived server-side, since the server has no way to
+  // know which path the requester took to fill the form.
+  aiParsed: z.boolean().optional(),
 };
 
 function requireScheduledForWhenScheduled<T extends { urgency: string; scheduledFor?: string }>(
@@ -62,3 +67,9 @@ export const updateErrandSchema = z
   });
 
 export type UpdateErrandInput = z.infer<typeof updateErrandSchema>;
+
+export const parseErrandTextSchema = z.object({
+  text: z.string().trim().min(3, "Add a bit more detail").max(2000, "That's a lot — try trimming it down"),
+});
+
+export type ParseErrandTextInput = z.infer<typeof parseErrandTextSchema>;

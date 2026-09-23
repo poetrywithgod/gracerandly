@@ -4,10 +4,11 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
 import { errands } from "../db/schema";
-import { createErrandSchema, updateErrandSchema } from "../schemas/errand";
+import { createErrandSchema, updateErrandSchema, parseErrandTextSchema } from "../schemas/errand";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
+import { parseErrandFromText } from "../lib/ai";
 import type { Errand } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -77,10 +78,24 @@ router.post(
         isRecurring: input.isRecurring,
         recurrenceRule: input.recurrenceRule,
         estimatedCost: input.estimatedCost,
+        aiParsed: input.aiParsed ?? false,
       })
       .returning();
 
     res.status(201).json({ errand: toErrand(row) });
+  })
+);
+
+// Free-text -> a draft the client pre-fills the create form with. Doesn't
+// touch the database — the requester still reviews/edits and submits
+// through the normal POST / afterward, so a bad or unavailable parse never
+// blocks posting an errand, only the AI shortcut to it.
+router.post(
+  "/parse",
+  asyncHandler(async (req, res) => {
+    const { text } = parseErrandTextSchema.parse(req.body);
+    const draft = await parseErrandFromText(text);
+    res.json({ draft });
   })
 );
 

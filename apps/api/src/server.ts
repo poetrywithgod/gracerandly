@@ -8,13 +8,43 @@ import express from "express";
 import cors from "cors";
 import authRouter from "./routes/auth";
 import errandsRouter from "./routes/errands";
+import walletRouter from "./routes/wallet";
 import { errorHandler } from "./middleware/errorHandler";
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      // Raw request body bytes, captured alongside the parsed JSON body —
+      // needed for Paystack webhook signature verification, which is an
+      // HMAC over the exact bytes they sent, not a re-serialization of the
+      // parsed object (see routes/wallet.ts).
+      rawBody?: Buffer;
+    }
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors());
-app.use(express.json());
+// 100kb (body-parser's default) is plenty for every route except
+// PATCH /auth/me/avatar, which carries a base64-encoded image — that
+// route used to layer its own express.json({ limit: "3mb" }) on top of
+// this one, but Express runs middleware in registration order, so this
+// global parser was rejecting anything over 100kb with a 413 before the
+// request ever reached that route-level override. Simplest fix: raise
+// the one global limit high enough for that route and drop the
+// redundant local one, rather than keeping two limits where only the
+// smaller one could ever actually apply.
+app.use(
+  express.json({
+    limit: "3mb",
+    verify: (req, _res, buf) => {
+      (req as express.Request).rawBody = buf;
+    },
+  })
+);
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "gracerandly-api", timestamp: new Date().toISOString() });
@@ -22,6 +52,7 @@ app.get("/health", (_req, res) => {
 
 app.use("/auth", authRouter);
 app.use("/errands", errandsRouter);
+app.use("/wallet", walletRouter);
 
 // Must be registered last — Express identifies error-handling middleware
 // by its four-argument signature.
