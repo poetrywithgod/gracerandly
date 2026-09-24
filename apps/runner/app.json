@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Gracerandly Runner",
+    "slug": "gracerandly-runner",
+    "version": "1.0.0",
+    "scheme": "gracerandly-runner",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#502D55",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-font",
+      "expo-splash-screen",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Gracerandly needs your location to match you with nearby errands and confirm pickup/delivery.",
+          "locationAlwaysPermission": "Gracerandly needs your location in the background so requesters can track your progress on an errand.",
+          "isAndroidBackgroundLocationEnabled": true
+        }
+      ]
+    ]
+  }
+}

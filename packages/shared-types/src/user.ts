@@ -32,16 +32,29 @@ export interface Guarantor {
   relationship: string;
 }
 
+export interface RunnerLocation {
+  lat: number;
+  lng: number;
+  heading?: number;
+  updatedAt: string;
+}
+
 export interface Runner extends BaseUser {
   role: "runner";
   nin: string;
   bvn: string;
   identityVerified: boolean;
   guarantor: Guarantor;
+  /**
+   * Mirrors TrustTierLevel from trust-tier.ts. A full `trust_tiers` table
+   * (with per-tier caps, completion stats, etc — see 6.8) doesn't exist
+   * yet; this is the plain level string until that lands, so callers
+   * shouldn't treat it as a foreign key.
+   */
   trustTierId: string;
   isOnline: boolean;
   activeErrandCount: number;
-  currentLocation?: { lat: number; lng: number; heading?: number; updatedAt: string };
+  currentLocation?: RunnerLocation;
 }
 
 export type AdminRole = "platform_admin" | "trust_safety_admin" | "finance_ops_admin";

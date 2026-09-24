@@ -9,7 +9,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { ErrandItem, GeoPoint } from "@gracerandly/shared-types";
+import type { ErrandItem, GeoPoint, Guarantor, RunnerLocation } from "@gracerandly/shared-types";
 
 // Mirrors packages/shared-types' Gender union.
 export const genderEnum = pgEnum("gender", ["female", "male", "unspecified"]);
@@ -47,6 +47,45 @@ export const requesters = pgTable("requesters", {
 
 export type RequesterRow = typeof requesters.$inferSelect;
 export type NewRequesterRow = typeof requesters.$inferInsert;
+
+// Mirrors packages/shared-types' TrustTierLevel union. Just a plain column
+// on the runner row for now — see the Runner.trustTierId comment in
+// shared-types/user.ts for why there's no trust_tiers table yet.
+export const trustTierLevelEnum = pgEnum("trust_tier_level", [
+  "probationary",
+  "bronze",
+  "silver",
+  "gold",
+]);
+
+// Mirrors packages/shared-types' Runner interface, plus the server-only
+// passwordHash column (same split as `requesters` above).
+export const runners = pgTable("runners", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  fullName: text("full_name").notNull(),
+  phone: text("phone").notNull().unique(),
+  email: text("email").unique(),
+  passwordHash: text("password_hash").notNull(),
+  // NIN/BVN are collected at signup per the PRD (6.1) but not verified
+  // against any government registry yet — identityVerified stays false
+  // until a Trust & Safety admin flow (or a verification provider) exists
+  // to actually check them.
+  nin: text("nin").notNull(),
+  bvn: text("bvn").notNull(),
+  identityVerified: boolean("identity_verified").notNull().default(false),
+  guarantor: jsonb("guarantor").$type<Guarantor>().notNull(),
+  trustTierLevel: trustTierLevelEnum("trust_tier_level").notNull().default("probationary"),
+  isOnline: boolean("is_online").notNull().default(false),
+  currentLocation: jsonb("current_location").$type<RunnerLocation>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
+export type RunnerRow = typeof runners.$inferSelect;
+export type NewRunnerRow = typeof runners.$inferInsert;
 
 // Mirrors packages/shared-types' VerificationChannel union.
 export const verificationChannelEnum = pgEnum("verification_channel", ["phone", "email"]);
@@ -100,15 +139,14 @@ export const errandStatusEnum = pgEnum("errand_status", [
 
 // Mirrors packages/shared-types' Errand interface.
 //
-// runnerId has no FK yet — there's no runners table until the Runner app's
-// signup flow exists. estimatedCost/finalCost are whole-Naira integers for
-// now (no kobo precision) — revisit if/when real money handling needs it.
+// estimatedCost/finalCost are whole-Naira integers for now (no kobo
+// precision) — revisit if/when real money handling needs it.
 export const errands = pgTable("errands", {
   id: uuid("id").primaryKey().defaultRandom(),
   requesterId: uuid("requester_id")
     .notNull()
     .references(() => requesters.id),
-  runnerId: uuid("runner_id"),
+  runnerId: uuid("runner_id").references(() => runners.id),
   category: errandCategoryEnum("category").notNull(),
   urgency: errandUrgencyEnum("urgency").notNull(),
   scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
@@ -150,10 +188,10 @@ export const transactionStatusEnum = pgEnum("transaction_status", [
 //
 // One row per payment attempt (not per errand — a failed attempt can be
 // retried, which creates a new row rather than overwriting the old one).
-// runnerId has no FK yet, same as errands.runnerId above — there's no
-// runners table until a real Runner app exists, so runnerPayout is
-// calculated and stored but never actually disbursed anywhere yet; only
-// the requester-facing pay-in (this table's real job right now) is live.
+// runnerPayout is calculated and stored but still never actually
+// disbursed anywhere yet — that's the vendor-disbursement flow from PRD
+// 6.7, still unbuilt; only the requester-facing pay-in (this table's real
+// job right now) is live.
 export const escrowTransactions = pgTable("escrow_transactions", {
   id: uuid("id").primaryKey().defaultRandom(),
   errandId: uuid("errand_id")
@@ -162,7 +200,7 @@ export const escrowTransactions = pgTable("escrow_transactions", {
   requesterId: uuid("requester_id")
     .notNull()
     .references(() => requesters.id),
-  runnerId: uuid("runner_id"),
+  runnerId: uuid("runner_id").references(() => runners.id),
   amount: integer("amount").notNull(),
   commissionAmount: integer("commission_amount").notNull(),
   runnerPayout: integer("runner_payout").notNull(),

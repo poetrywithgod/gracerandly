@@ -16,8 +16,8 @@ if (!JWT_SECRET_ENV) {
 const JWT_SECRET: string = JWT_SECRET_ENV;
 
 export interface AuthTokenPayload {
-  sub: string; // requester id
-  role: "requester";
+  sub: string; // requester or runner id, depending on role
+  role: "requester" | "runner";
 }
 
 export function signAuthToken(payload: AuthTokenPayload): string {

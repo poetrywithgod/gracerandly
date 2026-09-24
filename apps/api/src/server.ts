@@ -9,6 +9,7 @@ import cors from "cors";
 import authRouter from "./routes/auth";
 import errandsRouter from "./routes/errands";
 import walletRouter from "./routes/wallet";
+import runnersRouter from "./routes/runners";
 import { errorHandler } from "./middleware/errorHandler";
 
 declare global {
@@ -53,6 +54,7 @@ app.get("/health", (_req, res) => {
 app.use("/auth", authRouter);
 app.use("/errands", errandsRouter);
 app.use("/wallet", walletRouter);
+app.use("/runners", runnersRouter);
 
 // Must be registered last — Express identifies error-handling middleware
 // by its four-argument signature.

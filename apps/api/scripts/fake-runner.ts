@@ -18,13 +18,11 @@
  *      `runner-location:<errandId>` every tick.
  *
  * This is a dev-only stand-in — nothing here should ship as-is. A real
- * version needs: an authenticated Runner app sending its own GPS, and
- * status transitions gated by actual pickup verification (geofence-
- * unlocked photo confirm, not a timer — see the pickup-proof discussion
- * this was built alongside) rather than walking the route unconditionally.
- * The one gate that *is* real: marking "delivered" requires the errand's
- * deliveryPin, the same way a real runner would need the code the
- * requester reads out at handoff (see --pin below).
+ * Runner app + matching/status-transition API now exists (apps/runner,
+ * apps/api/src/routes/runners.ts) with authenticated accept + geofence-
+ * gated status transitions; keep this script around for testing the
+ * Requester app's tracking UI solo, without a second device/account, but
+ * point real Runner traffic at the actual app instead.
  */
 import "dotenv/config";
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
