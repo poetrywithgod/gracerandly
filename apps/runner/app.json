@@ -32,6 +32,13 @@
           "locationAlwaysPermission": "Gracerandly needs your location in the background so requesters can track your progress on an errand.",
           "isAndroidBackgroundLocationEnabled": true
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Gracerandly uses your photos to set your profile picture.",
+          "cameraPermission": "Gracerandly uses your camera to take a profile picture."
+        }
       ]
     ]
   }

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import * as SecureStore from "expo-secure-store";
-import type { Runner } from "@gracerandly/shared-types";
+import type { Runner, VehicleType } from "@gracerandly/shared-types";
 import { apiFetch, ApiError } from "../lib/apiClient";
 
 const TOKEN_STORAGE_KEY = "gracerandly_runner_auth_token";
@@ -22,6 +22,18 @@ export interface VerificationDetails {
   nin: string;
   bvn: string;
   guarantor: { fullName: string; phone: string; relationship: string };
+}
+
+export interface ProfileUpdateDetails {
+  fullName?: string;
+  email?: string;
+  vehicleType?: VehicleType;
+}
+
+export interface PayoutAccountDetails {
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
 }
 
 interface AuthResponse {
@@ -47,6 +59,14 @@ interface AuthContextValue {
    * PATCH /me/verification. Required before setOnlineStatus(true) or
    * accepting an errand will succeed. */
   submitVerification: (details: VerificationDetails) => Promise<void>;
+  /** Updates name/email/vehicle type — see routes/runners.ts's PATCH /me. */
+  updateProfile: (details: ProfileUpdateDetails) => Promise<void>;
+  /** Sets or clears (pass null) the profile photo — see routes/runners.ts's
+   * PATCH /me/avatar. */
+  updateAvatar: (imageDataUri: string | null) => Promise<void>;
+  /** Sets where payouts would land once real disbursement exists — see
+   * routes/runners.ts's PATCH /me/payout-account. */
+  updatePayoutAccount: (details: PayoutAccountDetails) => Promise<void>;
   /** Updates isOnline (and, when going online, the runner's current
    * position) both on the server and in local state. Screens that need to
    * report a fresh location while already online (e.g. the background
@@ -192,6 +212,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [token]
   );
 
+  const updateProfile = useCallback(
+    async (details: ProfileUpdateDetails) => {
+      if (!token) return;
+      setIsLoading(true);
+      setError(null);
+      try {
+        const response = await apiFetch<MeResponse>("/runners/me", {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify(details),
+        });
+        setUser(response.user);
+      } catch (err) {
+        setError(readableError(err));
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [token]
+  );
+
+  const updateAvatar = useCallback(
+    async (imageDataUri: string | null) => {
+      if (!token) return;
+      const response = await apiFetch<MeResponse>("/runners/me/avatar", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ image: imageDataUri }),
+      });
+      setUser(response.user);
+    },
+    [token]
+  );
+
+  const updatePayoutAccount = useCallback(
+    async (details: PayoutAccountDetails) => {
+      if (!token) return;
+      setIsLoading(true);
+      setError(null);
+      try {
+        const response = await apiFetch<MeResponse>("/runners/me/payout-account", {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify(details),
+        });
+        setUser(response.user);
+      } catch (err) {
+        setError(readableError(err));
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [token]
+  );
+
   const value = useMemo(
     () => ({
       isAuthenticated,
@@ -204,6 +281,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       submitVerification,
+      updateProfile,
+      updateAvatar,
+      updatePayoutAccount,
       setOnlineStatus,
       refreshUser,
     }),
@@ -218,6 +298,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       submitVerification,
+      updateProfile,
+      updateAvatar,
+      updatePayoutAccount,
       setOnlineStatus,
       refreshUser,
     ]

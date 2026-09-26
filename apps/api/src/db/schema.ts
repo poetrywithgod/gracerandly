@@ -58,6 +58,9 @@ export const trustTierLevelEnum = pgEnum("trust_tier_level", [
   "gold",
 ]);
 
+// Mirrors packages/shared-types' VehicleType union.
+export const vehicleTypeEnum = pgEnum("vehicle_type", ["bicycle", "motorcycle", "car", "on_foot"]);
+
 // Mirrors packages/shared-types' Runner interface, plus the server-only
 // passwordHash column (same split as `requesters` above).
 export const runners = pgTable("runners", {
@@ -66,6 +69,14 @@ export const runners = pgTable("runners", {
   phone: text("phone").notNull().unique(),
   email: text("email").unique(),
   passwordHash: text("password_hash").notNull(),
+  // Same base64 data-URI approach as requesters.avatarUrl — see that
+  // column's usage in routes/auth.ts's PATCH /me/avatar for the pattern
+  // this mirrors (routes/runners.ts's PATCH /me/avatar does the same).
+  avatarUrl: text("avatar_url"),
+  // How the runner gets around — optional, set from Settings. Not
+  // currently used by matching/ETA (see PRD 6.13's future route
+  // optimization), just informational for now.
+  vehicleType: vehicleTypeEnum("vehicle_type"),
   // NIN/BVN/guarantor are collected post-signup, in the Runner app's
   // settings (PATCH /me/verification) — not at signup. Null until
   // submitted. identityVerified flips to true on submission; there's no
@@ -76,6 +87,14 @@ export const runners = pgTable("runners", {
   bvn: text("bvn"),
   identityVerified: boolean("identity_verified").notNull().default(false),
   guarantor: jsonb("guarantor").$type<Guarantor>(),
+  // Where a runner's payout would land once real disbursement exists
+  // (PRD 6.7) — collected now so the Profile page has somewhere to put
+  // it, but nothing actually pays out to this yet. All three or none;
+  // toRunner() in routes/runners.ts only builds the nested
+  // `payoutAccount` object when all three are present.
+  bankName: text("bank_name"),
+  bankAccountNumber: text("bank_account_number"),
+  bankAccountName: text("bank_account_name"),
   trustTierLevel: trustTierLevelEnum("trust_tier_level").notNull().default("probationary"),
   isOnline: boolean("is_online").notNull().default(false),
   currentLocation: jsonb("current_location").$type<RunnerLocation>(),

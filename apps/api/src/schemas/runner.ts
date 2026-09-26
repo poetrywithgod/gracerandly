@@ -49,6 +49,44 @@ export const submitVerificationSchema = z.object({
 
 export type SubmitVerificationInput = z.infer<typeof submitVerificationSchema>;
 
+// PATCH /runners/me — profile fields a runner can change any time (unlike
+// NIN/BVN/guarantor, which lock in once verification is submitted; see
+// routes/runners.ts's PATCH /me handler for that rule).
+export const updateRunnerProfileSchema = z
+  .object({
+    fullName: z.string().trim().min(2, "Full name is required"),
+    email: z.email("Enter a valid email address"),
+    vehicleType: z.enum(["bicycle", "motorcycle", "car", "on_foot"]),
+  })
+  .partial();
+
+export type UpdateRunnerProfileInput = z.infer<typeof updateRunnerProfileSchema>;
+
+// Same shape and size cap as schemas/auth.ts's updateAvatarSchema — see
+// that file's comment for why the cap is ~1.4MB of decoded image data.
+const MAX_AVATAR_DATA_URI_LENGTH = 2_000_000;
+
+export const updateRunnerAvatarSchema = z.object({
+  image: z
+    .string()
+    .regex(/^data:image\/(png|jpe?g|webp);base64,/, "Expected a base64 image data URI")
+    .max(MAX_AVATAR_DATA_URI_LENGTH, "Image is too large")
+    .nullable(),
+});
+
+export type UpdateRunnerAvatarInput = z.infer<typeof updateRunnerAvatarSchema>;
+
+// PATCH /runners/me/payout-account — where a runner's payout would land
+// once real disbursement exists (PRD 6.7). Nigerian NUBAN account numbers
+// are 10 digits.
+export const updatePayoutAccountSchema = z.object({
+  bankName: z.string().trim().min(2, "Bank name is required"),
+  accountNumber: z.string().regex(/^\d{10}$/, "Enter a valid 10-digit account number"),
+  accountName: z.string().trim().min(2, "Account name is required"),
+});
+
+export type UpdatePayoutAccountInput = z.infer<typeof updatePayoutAccountSchema>;
+
 const geoPointSchema = z.object({
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),

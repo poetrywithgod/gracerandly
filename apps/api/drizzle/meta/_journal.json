@@ -50,6 +50,13 @@
       "when": 1790322308903,
       "tag": "0006_wandering_unicorn",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790407564394,
+      "tag": "0007_glossy_exiles",
+      "breakpoints": true
     }
   ]
 }

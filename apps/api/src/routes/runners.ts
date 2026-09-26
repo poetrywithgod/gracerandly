@@ -3,7 +3,7 @@ import { and, eq, inArray, or } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { db } from "../db/client";
-import { runners, errands } from "../db/schema";
+import { runners, errands, escrowTransactions } from "../db/schema";
 import {
   runnerSignupSchema,
   runnerLoginSchema,
@@ -11,6 +11,9 @@ import {
   availableErrandsQuerySchema,
   updateErrandStatusSchema,
   submitVerificationSchema,
+  updateRunnerProfileSchema,
+  updateRunnerAvatarSchema,
+  updatePayoutAccountSchema,
 } from "../schemas/runner";
 import { signAuthToken } from "../lib/jwt";
 import { AppErrors } from "../lib/errors";
@@ -56,10 +59,20 @@ function toRunner(row: typeof runners.$inferSelect): Runner {
     phone: row.phone,
     email: row.email ?? undefined,
     role: "runner",
+    avatarUrl: row.avatarUrl ?? undefined,
+    vehicleType: row.vehicleType ?? undefined,
     nin: row.nin ?? undefined,
     bvn: row.bvn ?? undefined,
     identityVerified: row.identityVerified,
     guarantor: row.guarantor ?? undefined,
+    payoutAccount:
+      row.bankName && row.bankAccountNumber && row.bankAccountName
+        ? {
+            bankName: row.bankName,
+            accountNumber: row.bankAccountNumber,
+            accountName: row.bankAccountName,
+          }
+        : undefined,
     trustTierId: row.trustTierLevel,
     isOnline: row.isOnline,
     // Computed per-request in handlers that need it (see /me); a plain
@@ -189,6 +202,117 @@ router.get(
   })
 );
 
+// Profile fields a runner can change any time — name/email/vehicle type.
+// Unlike requesters (routes/auth.ts's PATCH /me), there's no email
+// re-verification flow for runners yet, so an email change here just
+// takes effect immediately.
+router.patch(
+  "/me",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const input = updateRunnerProfileSchema.parse(req.body);
+    if (Object.keys(input).length === 0) {
+      throw AppErrors.validation("Nothing to update");
+    }
+
+    if (input.email) {
+      const clash = await db
+        .select({ id: runners.id })
+        .from(runners)
+        .where(eq(runners.email, input.email))
+        .limit(1);
+      if (clash.length > 0 && clash[0].id !== req.runnerId) {
+        throw AppErrors.conflict("An account with this email already exists");
+      }
+    }
+
+    const [row] = await db
+      .update(runners)
+      .set({
+        ...(input.fullName !== undefined && { fullName: input.fullName }),
+        ...(input.email !== undefined && { email: input.email }),
+        ...(input.vehicleType !== undefined && { vehicleType: input.vehicleType }),
+      })
+      .where(eq(runners.id, req.runnerId!))
+      .returning();
+
+    const activeErrandCount = await countActiveErrands(row.id);
+    res.json({ user: { ...toRunner(row), activeErrandCount } });
+  })
+);
+
+// Same base64-data-URI approach as routes/auth.ts's PATCH /me/avatar —
+// see updateRunnerAvatarSchema's comment for the size cap.
+router.patch(
+  "/me/avatar",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const input = updateRunnerAvatarSchema.parse(req.body);
+
+    const [row] = await db
+      .update(runners)
+      .set({ avatarUrl: input.image })
+      .where(eq(runners.id, req.runnerId!))
+      .returning();
+
+    const activeErrandCount = await countActiveErrands(row.id);
+    res.json({ user: { ...toRunner(row), activeErrandCount } });
+  })
+);
+
+// Where a runner's payout would land once real disbursement exists (PRD
+// 6.7) — see schema.ts's bankName/bankAccountNumber/bankAccountName
+// comment. Nothing actually pays out to this yet.
+router.patch(
+  "/me/payout-account",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const input = updatePayoutAccountSchema.parse(req.body);
+
+    const [row] = await db
+      .update(runners)
+      .set({
+        bankName: input.bankName,
+        bankAccountNumber: input.accountNumber,
+        bankAccountName: input.accountName,
+      })
+      .where(eq(runners.id, req.runnerId!))
+      .returning();
+
+    const activeErrandCount = await countActiveErrands(row.id);
+    res.json({ user: { ...toRunner(row), activeErrandCount } });
+  })
+);
+
+// Lifetime earnings summary for the Profile page's stats row.
+// totalEarned sums runnerPayout from escrow_transactions rows this
+// runner's deliveries have been linked to (see the "delivered" branch of
+// PATCH /errands/:id/status below, where a transaction moves to
+// "released" — that's the only status this sums, so an errand delivered
+// before the requester ever paid contributes 0, which is correct: there's
+// nothing to have paid out). completedErrandsCount comes from the
+// errands table directly rather than the transaction count, since not
+// every completed errand necessarily has a transaction row.
+router.get(
+  "/me/earnings",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const [completedRows, releasedRows] = await Promise.all([
+      db
+        .select({ id: errands.id })
+        .from(errands)
+        .where(and(eq(errands.runnerId, req.runnerId!), eq(errands.status, "delivered"))),
+      db
+        .select({ runnerPayout: escrowTransactions.runnerPayout })
+        .from(escrowTransactions)
+        .where(and(eq(escrowTransactions.runnerId, req.runnerId!), eq(escrowTransactions.status, "released"))),
+    ]);
+
+    const totalEarned = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
+    res.json({ totalEarned, completedErrandsCount: completedRows.length });
+  })
+);
+
 // Submits NIN/BVN/guarantor from the Runner app's Settings screen — see
 // submitVerificationSchema's comment for why this is separate from
 // signup. Sets identityVerified true immediately on submission: there's
@@ -196,10 +320,18 @@ router.get(
 // (schema.ts's identityVerified comment), so for now "submitted the
 // form" *is* "verified". Revisit once real verification/admin review
 // exists — this should gate on an admin approving it, not on submission.
+// Once verified, this locks — there's no re-submission flow yet (would
+// need to decide whether changing NIN/BVN should un-verify the account,
+// which is really an admin-review decision, not a self-serve one).
 router.patch(
   "/me/verification",
   requireRunnerAuth,
   asyncHandler(async (req, res) => {
+    const existing = await loadOwnRunner(req.runnerId!);
+    if (existing.identityVerified) {
+      throw AppErrors.conflict("Your identity is already verified");
+    }
+
     const input = submitVerificationSchema.parse(req.body);
 
     const [row] = await db
@@ -343,6 +475,17 @@ router.post(
       throw AppErrors.conflict("This errand was already taken or no longer exists");
     }
 
+    // Link this runner to whatever escrowed payment already exists for the
+    // errand, if any — accept can happen before or after the requester
+    // pays (see errands.ts: creation doesn't require payment first), so
+    // this is best-effort. Not gating accept on it: an unpaid errand is
+    // still a real errand a runner can go do, payment/payout is a
+    // separate concern from the errand-execution flow.
+    await db
+      .update(escrowTransactions)
+      .set({ runnerId: req.runnerId! })
+      .where(and(eq(escrowTransactions.errandId, row.id), eq(escrowTransactions.status, "escrowed")));
+
     res.json({ errand: toErrand(row) });
   })
 );
@@ -405,6 +548,25 @@ router.patch(
       .set({ status: input.status })
       .where(eq(errands.id, existing.id))
       .returning();
+
+    if (input.status === "delivered") {
+      // Best-effort, same reasoning as the accept handler: an errand can
+      // be delivered with no escrow transaction at all if the requester
+      // never paid through the app. When one does exist, this is the
+      // moment the payout amount is considered earned (GET /me/earnings
+      // sums "released" rows) — no money actually moves yet, this is
+      // bookkeeping ahead of the real disbursement flow (PRD 6.7).
+      await db
+        .update(escrowTransactions)
+        .set({ status: "released", releasedAt: new Date() })
+        .where(
+          and(
+            eq(escrowTransactions.errandId, row.id),
+            eq(escrowTransactions.runnerId, req.runnerId!),
+            eq(escrowTransactions.status, "escrowed")
+          )
+        );
+    }
 
     res.json({ errand: toErrand(row) });
   })
