@@ -41,10 +41,16 @@ export interface RunnerLocation {
 
 export interface Runner extends BaseUser {
   role: "runner";
-  nin: string;
-  bvn: string;
+  /**
+   * Identity verification (NIN/BVN/guarantor) happens post-signup, in the
+   * Runner app's settings — see routes/runners.ts's PATCH /me/verification.
+   * These three are undefined until the runner submits them, and a runner
+   * can't go online or accept errands until they do (identityVerified).
+   */
+  nin?: string;
+  bvn?: string;
   identityVerified: boolean;
-  guarantor: Guarantor;
+  guarantor?: Guarantor;
   /**
    * Mirrors TrustTierLevel from trust-tier.ts. A full `trust_tiers` table
    * (with per-tier caps, completion stats, etc — see 6.8) doesn't exist

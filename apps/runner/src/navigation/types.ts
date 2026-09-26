@@ -11,6 +11,7 @@ export type TabParamList = {
 export type MainStackParamList = {
   Tabs: undefined;
   ErrandDetail: { errandId: string };
+  Verification: undefined;
 };
 
 export type RootStackParamList = {

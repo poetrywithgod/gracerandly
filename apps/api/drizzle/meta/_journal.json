@@ -43,6 +43,13 @@
       "when": 1790244630826,
       "tag": "0005_keen_hex",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790322308903,
+      "tag": "0006_wandering_unicorn",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,9 @@ export interface SignUpDetails {
   phone: string;
   email?: string;
   password: string;
+}
+
+export interface VerificationDetails {
   nin: string;
   bvn: string;
   guarantor: { fullName: string; phone: string; relationship: string };
@@ -40,6 +43,10 @@ interface AuthContextValue {
   signIn: (credentials: AuthCredentials) => Promise<void>;
   signUp: (details: SignUpDetails) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Submits NIN/BVN/guarantor from Settings — see routes/runners.ts's
+   * PATCH /me/verification. Required before setOnlineStatus(true) or
+   * accepting an errand will succeed. */
+  submitVerification: (details: VerificationDetails) => Promise<void>;
   /** Updates isOnline (and, when going online, the runner's current
    * position) both on the server and in local state. Screens that need to
    * report a fresh location while already online (e.g. the background
@@ -163,6 +170,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [token]
   );
 
+  const submitVerification = useCallback(
+    async (details: VerificationDetails) => {
+      if (!token) return;
+      setIsLoading(true);
+      setError(null);
+      try {
+        const response = await apiFetch<MeResponse>("/runners/me/verification", {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify(details),
+        });
+        setUser(response.user);
+      } catch (err) {
+        setError(readableError(err));
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [token]
+  );
+
   const value = useMemo(
     () => ({
       isAuthenticated,
@@ -174,10 +203,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signIn,
       signUp,
       signOut,
+      submitVerification,
       setOnlineStatus,
       refreshUser,
     }),
-    [isAuthenticated, isLoading, isRestoring, error, user, token, signIn, signUp, signOut, setOnlineStatus, refreshUser]
+    [
+      isAuthenticated,
+      isLoading,
+      isRestoring,
+      error,
+      user,
+      token,
+      signIn,
+      signUp,
+      signOut,
+      submitVerification,
+      setOnlineStatus,
+      refreshUser,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

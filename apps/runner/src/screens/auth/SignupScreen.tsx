@@ -1,8 +1,29 @@
-import { useCallback, useState } from "react";
-import { Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Pressable, View } from "react-native";
+// Same gradient/glass structure as
+// apps/requester/src/screens/auth/SignupScreen.tsx — see
+// LoginScreen.tsx's header comment. Unlike the requester's signup, this
+// form is deliberately short: no NIN/BVN/guarantor here — those move to
+// a post-signup "Verification" step in Settings (see
+// screens/VerificationScreen.tsx), so a new runner gets into the app
+// immediately rather than facing a long form before they've seen it.
+// They just can't go online or accept an errand until that's done.
+import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  Text,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Pressable,
+  View,
+} from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { BlurTargetView } from "expo-blur";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
-import TextField from "../../components/TextField";
+import AuthHeader from "../../components/AuthHeader";
+import GlassCard from "../../components/GlassCard";
+import FloatingLabelInput from "../../components/FloatingLabelInput";
+import PhoneField, { DEFAULT_COUNTRY, type Country } from "../../components/PhoneField";
 import Button from "../../components/Button";
 import { useAuth } from "../../context/AuthContext";
 import type { AuthStackParamList } from "../../navigation/types";
@@ -11,109 +32,295 @@ const theme = getTheme("light");
 
 type Props = NativeStackScreenProps<AuthStackParamList, "Signup">;
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_LOCAL_PHONE_DIGITS = 6;
+const MIN_PASSWORD_LENGTH = 6;
+
+const GRADIENT_COLORS = [
+  theme.colors.primaryDark,
+  theme.colors.primary,
+  theme.colors.primaryDark,
+] as const;
+
+const GRADIENT_LOCATIONS = [0, 0.55, 1] as const;
+
 export default function SignupScreen({ navigation }: Props) {
   const { signUp, isLoading } = useAuth();
+  const blurTargetRef = useRef<View | null>(null);
 
   const [fullName, setFullName] = useState("");
-  const [phone, setPhone] = useState("");
+  const [country, setCountry] = useState<Country>(DEFAULT_COUNTRY);
+  const [localPhone, setLocalPhone] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [nin, setNin] = useState("");
-  const [bvn, setBvn] = useState("");
-  const [guarantorName, setGuarantorName] = useState("");
-  const [guarantorPhone, setGuarantorPhone] = useState("");
-  const [guarantorRelationship, setGuarantorRelationship] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const [submitted, setSubmitted] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // PRD 6.1: identity verification via NIN/BVN plus a guarantor is
-  // required at signup — every field below is on the Runner path only
-  // (the Requester app has no equivalent).
+  const fullNameError = useMemo(() => {
+    if (!submitted) return undefined;
+    if (!fullName.trim()) return "Full name is required";
+    if (fullName.trim().length < 2) return "Enter your full name";
+    return undefined;
+  }, [fullName, submitted]);
+
+  const phoneError = useMemo(() => {
+    if (!submitted) return undefined;
+    if (!localPhone) return "Phone number is required";
+    if (localPhone.length < MIN_LOCAL_PHONE_DIGITS) return "Enter a valid phone number";
+    return undefined;
+  }, [localPhone, submitted]);
+
+  const emailError = useMemo(() => {
+    if (!submitted) return undefined;
+    if (!email.trim()) return undefined;
+    if (!EMAIL_REGEX.test(email.trim())) return "Enter a valid email address";
+    return undefined;
+  }, [email, submitted]);
+
+  const passwordError = useMemo(() => {
+    if (!submitted) return undefined;
+    if (!password) return "Password is required";
+    if (password.length < MIN_PASSWORD_LENGTH)
+      return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+    return undefined;
+  }, [password, submitted]);
+
+  const confirmPasswordError = useMemo(() => {
+    if (!submitted) return undefined;
+    if (!confirmPassword) return "Confirm your password";
+    if (confirmPassword !== password) return "Passwords don't match";
+    return undefined;
+  }, [confirmPassword, password, submitted]);
+
   const canSubmit =
-    fullName.trim().length > 1 &&
-    /^\+[0-9]{7,15}$/.test(phone) &&
-    password.length >= 6 &&
-    /^\d{11}$/.test(nin) &&
-    /^\d{11}$/.test(bvn) &&
-    guarantorName.trim().length > 1 &&
-    /^\+[0-9]{7,15}$/.test(guarantorPhone) &&
-    guarantorRelationship.trim().length > 1 &&
+    fullName.trim().length > 0 &&
+    localPhone.length > 0 &&
+    password.length > 0 &&
+    confirmPassword.length > 0 &&
     !isLoading;
 
+  const isFormValid = useCallback(() => {
+    return (
+      fullName.trim().length >= 2 &&
+      localPhone.length >= MIN_LOCAL_PHONE_DIGITS &&
+      (!email.trim() || EMAIL_REGEX.test(email.trim())) &&
+      password.length >= MIN_PASSWORD_LENGTH &&
+      confirmPassword === password
+    );
+  }, [fullName, localPhone, email, password, confirmPassword]);
+
   const handleSignup = useCallback(async () => {
+    setSubmitted(true);
     setFormError(null);
-    if (!canSubmit) {
-      setFormError("Fill in every field correctly, including your guarantor's details");
-      return;
-    }
+    if (!isFormValid()) return;
+
     try {
       await signUp({
         fullName: fullName.trim(),
-        phone,
+        phone: `+${country.dialCode}${localPhone}`,
         email: email.trim() || undefined,
         password,
-        nin,
-        bvn,
-        guarantor: {
-          fullName: guarantorName.trim(),
-          phone: guarantorPhone,
-          relationship: guarantorRelationship.trim(),
-        },
       });
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Signup failed");
+      setFormError(err instanceof Error ? err.message : "Sign up failed");
     }
-  }, [canSubmit, signUp, fullName, phone, email, password, nin, bvn, guarantorName, guarantorPhone, guarantorRelationship]);
+  }, [isFormValid, signUp, fullName, country, localPhone, email, password]);
+
+  const handleGoToLogin = useCallback(() => {
+    navigation.navigate("Login");
+  }, [navigation]);
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.flex}>
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>Become a Runner</Text>
-        <Text style={styles.subtitle}>We verify every runner's identity before they can accept errands.</Text>
+    <View style={styles.gradient}>
+      <BlurTargetView ref={blurTargetRef} style={StyleSheet.absoluteFill}>
+        <LinearGradient
+          colors={GRADIENT_COLORS}
+          locations={GRADIENT_LOCATIONS}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+        <View pointerEvents="none" style={styles.blobTop} />
+        <View pointerEvents="none" style={styles.blobBottom} />
+      </BlurTargetView>
 
-        <TextField label="Full name" value={fullName} onChangeText={setFullName} placeholder="Your full name" />
-        <TextField label="Phone number" value={phone} onChangeText={setPhone} placeholder="+2348012345678" keyboardType="phone-pad" autoCapitalize="none" />
-        <TextField label="Email (optional)" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" />
-        <TextField label="Password" value={password} onChangeText={setPassword} placeholder="At least 6 characters" secureTextEntry autoCapitalize="none" />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.flex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <AuthHeader heading="Become a Runner" />
 
-        <Text style={styles.sectionLabel}>Identity verification</Text>
-        <TextField label="NIN" value={nin} onChangeText={setNin} placeholder="11-digit National ID number" keyboardType="number-pad" maxLength={11} />
-        <TextField label="BVN" value={bvn} onChangeText={setBvn} placeholder="11-digit Bank Verification Number" keyboardType="number-pad" maxLength={11} />
+          <GlassCard style={styles.card} blurTarget={blurTargetRef}>
+            <FloatingLabelInput
+              label="Full name"
+              value={fullName}
+              onChangeText={setFullName}
+              autoCapitalize="words"
+              autoComplete="name"
+              textContentType="name"
+              returnKeyType="next"
+              error={fullNameError}
+            />
 
-        <Text style={styles.sectionLabel}>Guarantor</Text>
-        <TextField label="Guarantor's full name" value={guarantorName} onChangeText={setGuarantorName} placeholder="Someone who can vouch for you" />
-        <TextField label="Guarantor's phone number" value={guarantorPhone} onChangeText={setGuarantorPhone} placeholder="+2348012345678" keyboardType="phone-pad" autoCapitalize="none" />
-        <TextField label="Relationship to you" value={guarantorRelationship} onChangeText={setGuarantorRelationship} placeholder="e.g. Uncle, Former employer" />
+            <PhoneField
+              value={localPhone}
+              onChangeText={setLocalPhone}
+              country={country}
+              onChangeCountry={setCountry}
+              returnKeyType="next"
+              error={phoneError}
+            />
 
-        {formError ? <Text style={styles.formError}>{formError}</Text> : null}
+            <FloatingLabelInput
+              label="Email (optional)"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+              textContentType="emailAddress"
+              returnKeyType="next"
+              error={emailError}
+            />
 
-        <Button label={isLoading ? "Creating account…" : "Sign up"} onPress={handleSignup} disabled={isLoading} />
+            <FloatingLabelInput
+              label="Password"
+              value={password}
+              onChangeText={setPassword}
+              isPassword
+              autoCapitalize="none"
+              autoComplete="password-new"
+              textContentType="newPassword"
+              returnKeyType="next"
+              error={passwordError}
+            />
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Already a runner? </Text>
-          <Pressable onPress={() => navigation.navigate("Login")} hitSlop={8}>
-            <Text style={styles.footerLink}>Log in</Text>
-          </Pressable>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+            <FloatingLabelInput
+              label="Confirm password"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              isPassword
+              autoCapitalize="none"
+              autoComplete="password-new"
+              textContentType="newPassword"
+              returnKeyType="done"
+              onSubmitEditing={handleSignup}
+              error={confirmPasswordError}
+            />
+
+            <Text style={styles.hint}>
+              You&apos;ll verify your NIN, BVN and a guarantor from Settings after signing up —
+              that&apos;s required before you can go online or accept errands.
+            </Text>
+
+            {formError ? <Text style={styles.formError}>{formError}</Text> : null}
+
+            <Button
+              label={isLoading ? "Creating account…" : "Sign up"}
+              onPress={handleSignup}
+              disabled={!canSubmit}
+              style={styles.signupButton}
+            />
+          </GlassCard>
+
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>Already a runner? </Text>
+            <Pressable
+              onPress={handleGoToLogin}
+              hitSlop={8}
+              accessibilityRole="link"
+              accessibilityLabel="Go to log in"
+            >
+              <Text style={styles.footerLink}>Log in</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: theme.colors.background },
-  scroll: { flexGrow: 1, padding: theme.spacing.lg, paddingTop: theme.spacing.xxl },
-  title: { fontFamily: theme.fonts.display, fontSize: 24, color: theme.colors.primaryDark },
-  subtitle: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.textMuted, marginBottom: theme.spacing.lg },
-  sectionLabel: {
-    fontFamily: theme.fonts.uiSemibold,
+  flex: { flex: 1 },
+  gradient: { flex: 1 },
+
+  blobTop: {
+    position: "absolute",
+    top: -80,
+    right: -60,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: "rgba(255,255,255,0.10)",
+  },
+  blobBottom: {
+    position: "absolute",
+    bottom: -100,
+    left: -80,
+    width: 320,
+    height: 320,
+    borderRadius: 160,
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+
+  scroll: {
+    flexGrow: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: theme.spacing.lg,
+  },
+
+  card: {
+    width: "100%",
+    backgroundColor: "rgba(20, 24, 40, 0.55)",
+    borderColor: "rgba(255,255,255,0.18)",
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 12,
+  },
+
+  hint: {
+    fontFamily: theme.fonts.ui,
+    fontSize: 12,
+    color: "rgba(255,255,255,0.7)",
+    marginTop: -theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+    lineHeight: 17,
+  },
+
+  formError: {
+    fontFamily: theme.fonts.uiMedium,
     fontSize: 13,
-    color: theme.colors.primary,
-    textTransform: "uppercase",
-    marginTop: theme.spacing.sm,
+    color: "#FFB4A8",
     marginBottom: theme.spacing.sm,
   },
-  formError: { fontFamily: theme.fonts.uiMedium, fontSize: 13, color: theme.colors.danger, marginBottom: theme.spacing.sm },
-  footer: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: theme.spacing.lg, marginBottom: theme.spacing.xl },
-  footerText: { fontFamily: theme.fonts.ui, color: theme.colors.textMuted },
-  footerLink: { fontFamily: theme.fonts.uiSemibold, color: theme.colors.primary, textDecorationLine: "underline" },
+
+  signupButton: {
+    marginTop: theme.spacing.sm,
+  },
+
+  footer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: theme.spacing.lg,
+  },
+  footerText: {
+    fontFamily: theme.fonts.ui,
+    color: "rgba(255,255,255,0.75)",
+  },
+  footerLink: {
+    fontFamily: theme.fonts.uiSemibold,
+    color: theme.colors.textOnPrimary,
+    textDecorationLine: "underline",
+  },
 });

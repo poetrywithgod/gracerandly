@@ -66,14 +66,16 @@ export const runners = pgTable("runners", {
   phone: text("phone").notNull().unique(),
   email: text("email").unique(),
   passwordHash: text("password_hash").notNull(),
-  // NIN/BVN are collected at signup per the PRD (6.1) but not verified
-  // against any government registry yet — identityVerified stays false
-  // until a Trust & Safety admin flow (or a verification provider) exists
-  // to actually check them.
-  nin: text("nin").notNull(),
-  bvn: text("bvn").notNull(),
+  // NIN/BVN/guarantor are collected post-signup, in the Runner app's
+  // settings (PATCH /me/verification) — not at signup. Null until
+  // submitted. identityVerified flips to true on submission; there's no
+  // admin review step or registry check yet (see that route for the
+  // "self-serve auto-verify, revisit once Trust & Safety review exists"
+  // caveat), it's just the gate on going online / accepting errands.
+  nin: text("nin"),
+  bvn: text("bvn"),
   identityVerified: boolean("identity_verified").notNull().default(false),
-  guarantor: jsonb("guarantor").$type<Guarantor>().notNull(),
+  guarantor: jsonb("guarantor").$type<Guarantor>(),
   trustTierLevel: trustTierLevelEnum("trust_tier_level").notNull().default("probationary"),
   isOnline: boolean("is_online").notNull().default(false),
   currentLocation: jsonb("current_location").$type<RunnerLocation>(),

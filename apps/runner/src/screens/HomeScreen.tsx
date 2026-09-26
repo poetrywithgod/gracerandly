@@ -80,6 +80,12 @@ export default function HomeScreen() {
 
   const handleToggleOnline = useCallback(async () => {
     setError(null);
+
+    if (!user?.isOnline && !user?.identityVerified) {
+      navigation.navigate("Verification");
+      return;
+    }
+
     setIsTogglingOnline(true);
     try {
       if (user?.isOnline) {
@@ -98,7 +104,7 @@ export default function HomeScreen() {
     } finally {
       setIsTogglingOnline(false);
     }
-  }, [user?.isOnline, setOnlineStatus, refreshUser]);
+  }, [user?.isOnline, user?.identityVerified, navigation, setOnlineStatus, refreshUser]);
 
   const handleAccept = useCallback(
     async (errandId: string) => {
@@ -126,14 +132,20 @@ export default function HomeScreen() {
       ListHeaderComponent={
         <View>
           <View style={styles.toggleCard}>
-            <View>
-              <Text style={styles.toggleTitle}>{user?.isOnline ? "You're online" : "You're offline"}</Text>
+            <View style={styles.toggleTextWrap}>
+              <Text style={styles.toggleTitle}>
+                {user?.isOnline ? "You're online" : user?.identityVerified ? "You're offline" : "Verification needed"}
+              </Text>
               <Text style={styles.toggleSubtitle}>
-                {user?.isOnline ? "Nearby errands will show up below" : "Go online to start seeing nearby errands"}
+                {user?.isOnline
+                  ? "Nearby errands will show up below"
+                  : user?.identityVerified
+                    ? "Go online to start seeing nearby errands"
+                    : "Complete identity verification before you can go online"}
               </Text>
             </View>
             <Button
-              label={user?.isOnline ? "Go offline" : "Go online"}
+              label={user?.isOnline ? "Go offline" : user?.identityVerified ? "Go online" : "Verify"}
               onPress={handleToggleOnline}
               variant={user?.isOnline ? "danger" : "primary"}
               loading={isTogglingOnline}
@@ -227,7 +239,8 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   toggleTitle: { fontFamily: theme.fonts.uiSemibold, fontSize: 16, color: theme.colors.text },
-  toggleSubtitle: { fontFamily: theme.fonts.ui, fontSize: 12, color: theme.colors.textMuted, maxWidth: 180 },
+  toggleTextWrap: { flex: 1, paddingRight: theme.spacing.sm },
+  toggleSubtitle: { fontFamily: theme.fonts.ui, fontSize: 12, color: theme.colors.textMuted },
   errorText: { fontFamily: theme.fonts.uiMedium, fontSize: 13, color: theme.colors.danger, marginBottom: theme.spacing.md },
   sectionTitleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   sectionTitle: {

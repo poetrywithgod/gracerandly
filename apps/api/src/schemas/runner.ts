@@ -17,14 +17,16 @@ const guarantorSchema = z.object({
   relationship: z.string().trim().min(2, "How this person knows you is required"),
 });
 
+// Signup only collects what's needed to create the account — NIN/BVN/
+// guarantor move to a separate post-signup step (see
+// submitVerificationSchema below) so a new runner can get into the app
+// immediately and complete identity verification from Settings, rather
+// than facing a long form before they've even seen the app.
 export const runnerSignupSchema = z.object({
   fullName: z.string().trim().min(2, "Full name is required"),
   phone: phoneSchema,
   email: z.email("Enter a valid email address").optional(),
   password: z.string().min(6, "Password must be at least 6 characters"),
-  nin: ninSchema,
-  bvn: bvnSchema,
-  guarantor: guarantorSchema,
 });
 
 export type RunnerSignupInput = z.infer<typeof runnerSignupSchema>;
@@ -35,6 +37,17 @@ export const runnerLoginSchema = z.object({
 });
 
 export type RunnerLoginInput = z.infer<typeof runnerLoginSchema>;
+
+// PATCH /runners/me/verification — submitted from the Runner app's
+// Settings screen, any time after signup. A runner can't go online or
+// accept errands until this has been submitted (see routes/runners.ts).
+export const submitVerificationSchema = z.object({
+  nin: ninSchema,
+  bvn: bvnSchema,
+  guarantor: guarantorSchema,
+});
+
+export type SubmitVerificationInput = z.infer<typeof submitVerificationSchema>;
 
 const geoPointSchema = z.object({
   lat: z.number().min(-90).max(90),

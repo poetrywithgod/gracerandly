@@ -1,7 +1,8 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import * as SplashScreen from "expo-splash-screen";
+import * as Font from "expo-font";
 import {
   useFonts,
   Poppins_400Regular,
@@ -15,28 +16,36 @@ import { AuthProvider } from "./src/context/AuthContext";
 
 SplashScreen.preventAutoHideAsync();
 
-// Only Poppins is loaded here (unlike the Requester app, which also
-// bundles Sagace + Merriweather) — the Runner app doesn't use the
-// display/serif font tokens, so there's no need to ship those assets
-// again. `@gracerandly/theme`'s `fonts.display` token still resolves to
-// "Sagace-Bold" for any shared component that reads it; React Native just
-// falls back to the platform default font when that family isn't
-// registered, so nothing breaks — it just won't look brand-exact.
+// Same font-loading shape as apps/requester/App.tsx, minus Merriweather —
+// the Runner app has no long-form reading screens to need it. Sagace is
+// loaded so the AuthHeader/AppHeader wordmarks render brand-exact instead
+// of falling back to the platform default font.
 export default function App() {
-  const [fontsLoaded] = useFonts({
+  const [sagaceLoaded, setSagaceLoaded] = useState(false);
+  const [poppinsLoaded] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
     Poppins_600SemiBold,
     Poppins_700Bold,
   });
 
+  useEffect(() => {
+    Font.loadAsync({
+      "Sagace-Regular": require("./assets/fonts/sagace/Sagace-Regular.otf"),
+      "Sagace-Medium": require("./assets/fonts/sagace/Sagace-Medium.otf"),
+      "Sagace-Bold": require("./assets/fonts/sagace/Sagace-Bold.otf"),
+    }).then(() => setSagaceLoaded(true));
+  }, []);
+
+  const fontsReady = sagaceLoaded && poppinsLoaded;
+
   const onLayoutRootView = useCallback(async () => {
-    if (fontsLoaded) {
+    if (fontsReady) {
       await SplashScreen.hideAsync();
     }
-  }, [fontsLoaded]);
+  }, [fontsReady]);
 
-  if (!fontsLoaded) {
+  if (!fontsReady) {
     return null;
   }
 

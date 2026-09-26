@@ -10,6 +10,7 @@ import {
   updateRunnerStatusSchema,
   availableErrandsQuerySchema,
   updateErrandStatusSchema,
+  submitVerificationSchema,
 } from "../schemas/runner";
 import { signAuthToken } from "../lib/jwt";
 import { AppErrors } from "../lib/errors";
@@ -55,10 +56,10 @@ function toRunner(row: typeof runners.$inferSelect): Runner {
     phone: row.phone,
     email: row.email ?? undefined,
     role: "runner",
-    nin: row.nin,
-    bvn: row.bvn,
+    nin: row.nin ?? undefined,
+    bvn: row.bvn ?? undefined,
     identityVerified: row.identityVerified,
-    guarantor: row.guarantor,
+    guarantor: row.guarantor ?? undefined,
     trustTierId: row.trustTierLevel,
     isOnline: row.isOnline,
     // Computed per-request in handlers that need it (see /me); a plain
@@ -154,9 +155,6 @@ router.post(
         phone: input.phone,
         email: input.email,
         passwordHash,
-        nin: input.nin,
-        bvn: input.bvn,
-        guarantor: input.guarantor,
       })
       .returning();
 
@@ -191,6 +189,35 @@ router.get(
   })
 );
 
+// Submits NIN/BVN/guarantor from the Runner app's Settings screen — see
+// submitVerificationSchema's comment for why this is separate from
+// signup. Sets identityVerified true immediately on submission: there's
+// no Trust & Safety admin review flow or NIMC/bank registry check yet
+// (schema.ts's identityVerified comment), so for now "submitted the
+// form" *is* "verified". Revisit once real verification/admin review
+// exists — this should gate on an admin approving it, not on submission.
+router.patch(
+  "/me/verification",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const input = submitVerificationSchema.parse(req.body);
+
+    const [row] = await db
+      .update(runners)
+      .set({
+        nin: input.nin,
+        bvn: input.bvn,
+        guarantor: input.guarantor,
+        identityVerified: true,
+      })
+      .where(eq(runners.id, req.runnerId!))
+      .returning();
+
+    const activeErrandCount = await countActiveErrands(row.id);
+    res.json({ user: { ...toRunner(row), activeErrandCount } });
+  })
+);
+
 // One endpoint for both "go online/offline" and "here's my current
 // position" since the Runner app sends them together on every location
 // tick while online (see apps/runner/src/lib/location.ts).
@@ -201,6 +228,13 @@ router.patch(
     const input = updateRunnerStatusSchema.parse(req.body);
     if (input.isOnline && !input.location) {
       throw AppErrors.validation("Location is required to go online");
+    }
+
+    if (input.isOnline) {
+      const existing = await loadOwnRunner(req.runnerId!);
+      if (!existing.identityVerified) {
+        throw AppErrors.validation("Complete identity verification before going online");
+      }
     }
 
     const [row] = await db
@@ -283,6 +317,14 @@ router.post(
   "/errands/:id/accept",
   requireRunnerAuth,
   asyncHandler(async (req, res) => {
+    // Defense in depth: going online already requires identityVerified
+    // (see PATCH /me/status), but accept doesn't itself require being
+    // online, so check again here rather than relying on that alone.
+    const runner = await loadOwnRunner(req.runnerId!);
+    if (!runner.identityVerified) {
+      throw AppErrors.validation("Complete identity verification before accepting errands");
+    }
+
     const activeCount = await countActiveErrands(req.runnerId!);
     if (activeCount >= MAX_CONCURRENT_ERRANDS) {
       throw AppErrors.conflict(`You already have ${MAX_CONCURRENT_ERRANDS} active errands`);
