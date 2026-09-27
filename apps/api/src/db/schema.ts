@@ -87,14 +87,28 @@ export const runners = pgTable("runners", {
   bvn: text("bvn"),
   identityVerified: boolean("identity_verified").notNull().default(false),
   guarantor: jsonb("guarantor").$type<Guarantor>(),
-  // Where a runner's payout would land once real disbursement exists
-  // (PRD 6.7) — collected now so the Profile page has somewhere to put
-  // it, but nothing actually pays out to this yet. All three or none;
-  // toRunner() in routes/runners.ts only builds the nested
-  // `payoutAccount` object when all three are present.
+  // Where a runner's payout lands (PRD 6.7) — bankName/bankAccountNumber/
+  // bankAccountName are collected together; toRunner() in
+  // routes/runners.ts only builds the nested `payoutAccount` object when
+  // all three are present. bankCode is Paystack's numeric bank code,
+  // resolved server-side from bankName against their /bank list at save
+  // time (see lib/payments.ts's resolveBankCode) — needed to create a
+  // transfer recipient, never shown to the runner. bankAccountVerified
+  // flips true only once Paystack's account-resolve endpoint confirms the
+  // account number actually belongs to that bank (see PATCH
+  // /me/payout-account); a runner can save an account that failed
+  // resolution (typos happen, and Paystack's resolve endpoint doesn't
+  // cover every bank), but can't request a payout until it's true.
+  // paystackRecipientCode caches the transfer recipient Paystack returns
+  // so repeat payouts don't recreate one each time — cleared whenever the
+  // account details change, so a stale recipient never receives a
+  // transfer meant for a new account.
   bankName: text("bank_name"),
   bankAccountNumber: text("bank_account_number"),
   bankAccountName: text("bank_account_name"),
+  bankCode: text("bank_code"),
+  bankAccountVerified: boolean("bank_account_verified").notNull().default(false),
+  paystackRecipientCode: text("paystack_recipient_code"),
   trustTierLevel: trustTierLevelEnum("trust_tier_level").notNull().default("probationary"),
   isOnline: boolean("is_online").notNull().default(false),
   currentLocation: jsonb("current_location").$type<RunnerLocation>(),
@@ -235,3 +249,35 @@ export const escrowTransactions = pgTable("escrow_transactions", {
 
 export type EscrowTransactionRow = typeof escrowTransactions.$inferSelect;
 export type NewEscrowTransactionRow = typeof escrowTransactions.$inferInsert;
+
+// Mirrors packages/shared-types' RunnerPayoutStatus union.
+export const runnerPayoutStatusEnum = pgEnum("runner_payout_status", ["pending", "success", "failed"]);
+
+// Mirrors packages/shared-types' RunnerPayout interface.
+//
+// One row per payout *run*, not per errand — POST /runners/me/payout
+// bundles every currently-"released" escrow_transactions row for that
+// runner into a single Paystack transfer. transactionIds freezes which
+// rows were included at request time, so a transaction that becomes
+// released later (a different delivery, mid-flight) isn't accidentally
+// swept into this payout when the webhook later marks those same
+// transactions "disbursed" — see routes/runners.ts's POST /me/payout.
+export const runnerPayouts = pgTable("runner_payouts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runnerId: uuid("runner_id")
+    .notNull()
+    .references(() => runners.id),
+  amount: integer("amount").notNull(),
+  status: runnerPayoutStatusEnum("status").notNull().default("pending"),
+  transactionIds: jsonb("transaction_ids").$type<string[]>().notNull(),
+  // Paystack's transfer_code — used to match the async transfer.success /
+  // transfer.failed / transfer.reversed webhook back to this row (same
+  // pattern as escrowTransactions.providerReference for pay-ins).
+  providerReference: text("provider_reference").notNull().unique(),
+  failureReason: text("failure_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+});
+
+export type RunnerPayoutRow = typeof runnerPayouts.$inferSelect;
+export type NewRunnerPayoutRow = typeof runnerPayouts.$inferInsert;

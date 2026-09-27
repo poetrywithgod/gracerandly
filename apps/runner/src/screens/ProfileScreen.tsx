@@ -55,6 +55,8 @@ const VEHICLE_LABELS: Record<VehicleType, string> = {
 
 interface EarningsResponse {
   totalEarned: number;
+  availableBalance: number;
+  totalPaidOut: number;
   completedErrandsCount: number;
 }
 
@@ -94,6 +96,11 @@ export default function ProfileScreen() {
   const [accountName, setAccountName] = useState(user?.payoutAccount?.accountName ?? "");
   const [isSavingPayout, setIsSavingPayout] = useState(false);
   const [payoutError, setPayoutError] = useState<string | null>(null);
+
+  // --- Payout request ---
+  const [isRequestingPayout, setIsRequestingPayout] = useState(false);
+  const [payoutRequestError, setPayoutRequestError] = useState<string | null>(null);
+  const [payoutRequestSuccess, setPayoutRequestSuccess] = useState<string | null>(null);
 
   // --- Stats ---
   const [errands, setErrands] = useState<Errand[] | null>(null);
@@ -207,6 +214,25 @@ export default function ProfileScreen() {
       setPayoutError(err instanceof ApiError ? err.message : "Couldn't save payout details");
     } finally {
       setIsSavingPayout(false);
+    }
+  }
+
+  async function handleRequestPayout() {
+    if (!token) return;
+    setPayoutRequestError(null);
+    setPayoutRequestSuccess(null);
+    setIsRequestingPayout(true);
+    try {
+      const { payout } = await apiFetch<{ payout: { amount: number } }>("/runners/me/payout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setPayoutRequestSuccess(`${formatNaira(payout.amount)} is on its way to your bank account`);
+      await loadStats(true);
+    } catch (err) {
+      setPayoutRequestError(err instanceof ApiError ? err.message : "Couldn't start the payout");
+    } finally {
+      setIsRequestingPayout(false);
     }
   }
 
@@ -335,6 +361,7 @@ export default function ProfileScreen() {
                     <Text style={styles.rowLabel}>{user.payoutAccount.bankName}</Text>
                     <Text style={styles.rowHint}>
                       {user.payoutAccount.accountName} · {maskAccountNumber(user.payoutAccount.accountNumber)}
+                      {!user.payoutAccount.verified ? " · unverified" : ""}
                     </Text>
                   </>
                 ) : (
@@ -347,6 +374,36 @@ export default function ProfileScreen() {
               <ChevronRight size={18} color={theme.colors.textMuted} />
             </Pressable>
           )}
+
+          {user.payoutAccount ? (
+            <View style={styles.card}>
+              <View style={styles.rowLeft}>
+                <Wallet size={20} color={theme.colors.primary} />
+                <View style={styles.rowLeftText}>
+                  <Text style={styles.rowLabel}>
+                    {earnings ? formatNaira(earnings.availableBalance) : "—"} available
+                  </Text>
+                  <Text style={styles.rowHint}>
+                    {earnings && earnings.totalPaidOut > 0
+                      ? `${formatNaira(earnings.totalPaidOut)} paid out so far`
+                      : "Paid out to your bank account"}
+                  </Text>
+                </View>
+              </View>
+              {payoutRequestError ? <Text style={styles.errorText}>{payoutRequestError}</Text> : null}
+              {payoutRequestSuccess ? <Text style={styles.rowHint}>{payoutRequestSuccess}</Text> : null}
+              <Button
+                label="Request payout"
+                onPress={handleRequestPayout}
+                loading={isRequestingPayout}
+                disabled={!earnings || earnings.availableBalance <= 0 || !user.payoutAccount.verified}
+                style={styles.editProfileButton}
+              />
+              {!user.payoutAccount.verified ? (
+                <Text style={styles.rowHint}>Re-save your payout account details to verify it first</Text>
+              ) : null}
+            </View>
+          ) : null}
 
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Trust tier</Text>

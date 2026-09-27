@@ -43,12 +43,16 @@ export interface RunnerLocation {
  * future route-optimization work), not used by matching or ETAs yet. */
 export type VehicleType = "bicycle" | "motorcycle" | "car" | "on_foot";
 
-/** Where a runner's payout would land once real disbursement exists
- * (PRD 6.7). Undefined until all three fields are set. */
+/** Where a runner's payout would land (PRD 6.7). Undefined until all
+ * three fields are set. `verified` is true once Paystack has confirmed
+ * the account number resolves to a real NUBAN account at that bank —
+ * a runner can still save an unverified account, but can't request a
+ * payout until it's verified (see POST /runners/me/payout). */
 export interface PayoutAccount {
   bankName: string;
   accountNumber: string;
   accountName: string;
+  verified: boolean;
 }
 
 export interface Runner extends BaseUser {

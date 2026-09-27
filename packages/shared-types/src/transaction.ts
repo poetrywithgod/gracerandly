@@ -15,6 +15,24 @@ export interface EscrowTransaction {
   releasedAt?: string;
 }
 
+// A payout run: one bank transfer to a runner covering some number of
+// "released" escrow transactions at once (see EscrowTransaction.status).
+// Not per-errand — a runner may have several released transactions
+// waiting when they request a payout, and this bundles them into a
+// single transfer.
+export type RunnerPayoutStatus = "pending" | "success" | "failed";
+
+export interface RunnerPayout {
+  id: string;
+  runnerId: string;
+  amount: number;
+  status: RunnerPayoutStatus;
+  transactionIds: string[];
+  failureReason?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
 export interface VendorDisbursement {
   id: string;
   errandId: string;

@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { db } from "../db/client";
-import { runners, errands, escrowTransactions } from "../db/schema";
+import { runners, errands, escrowTransactions, runnerPayouts } from "../db/schema";
 import {
   runnerSignupSchema,
   runnerLoginSchema,
@@ -26,7 +27,8 @@ import {
   isWithinGeofence,
   milesToMeters,
 } from "../lib/matching";
-import type { Errand, ErrandStatus, Runner } from "@gracerandly/shared-types";
+import { resolveBankCode, resolveAccountNumber, createTransferRecipient, initiateTransfer } from "../lib/payments";
+import type { Errand, ErrandStatus, Runner, RunnerPayout } from "@gracerandly/shared-types";
 
 const router: Router = Router();
 
@@ -71,6 +73,7 @@ function toRunner(row: typeof runners.$inferSelect): Runner {
             bankName: row.bankName,
             accountNumber: row.bankAccountNumber,
             accountName: row.bankAccountName,
+            verified: row.bankAccountVerified,
           }
         : undefined,
     trustTierId: row.trustTierLevel,
@@ -110,6 +113,19 @@ function toErrand(row: typeof errands.$inferSelect): Errand {
     aiParsed: row.aiParsed,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function toRunnerPayout(row: typeof runnerPayouts.$inferSelect): RunnerPayout {
+  return {
+    id: row.id,
+    runnerId: row.runnerId,
+    amount: row.amount,
+    status: row.status,
+    transactionIds: row.transactionIds,
+    failureReason: row.failureReason ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    completedAt: row.completedAt?.toISOString() ?? undefined,
   };
 }
 
@@ -260,27 +276,147 @@ router.patch(
   })
 );
 
-// Where a runner's payout would land once real disbursement exists (PRD
-// 6.7) — see schema.ts's bankName/bankAccountNumber/bankAccountName
-// comment. Nothing actually pays out to this yet.
+// Where a runner's payout lands (PRD 6.7). Resolves the typed bank name
+// against Paystack's bank list (fails the whole save if it's not
+// recognized — no bank code means we could never pay out to this account
+// anyway) and, when that succeeds, verifies the account number actually
+// belongs to that bank. A resolve failure at that second step doesn't
+// block the save — Paystack's resolve endpoint has real, legitimate
+// misses — but the account is stored unverified, and POST /me/payout
+// refuses to run until it's verified. A resolved account's name (the
+// bank's record, not what the runner typed) overwrites accountName, since
+// that's the name that has to match for a transfer to succeed.
 router.patch(
   "/me/payout-account",
   requireRunnerAuth,
   asyncHandler(async (req, res) => {
     const input = updatePayoutAccountSchema.parse(req.body);
 
+    const bank = await resolveBankCode(input.bankName);
+    if (!bank) {
+      throw AppErrors.validation(
+        `We don't recognize "${input.bankName}" as a bank — check the spelling and try again`
+      );
+    }
+
+    let accountName = input.accountName;
+    let verified = false;
+    try {
+      const resolved = await resolveAccountNumber(input.accountNumber, bank.code);
+      accountName = resolved.accountName;
+      verified = true;
+    } catch {
+      // Left unverified — see comment above. The runner can still see and
+      // edit what they saved; they just can't be paid out until this
+      // resolves (or they fix a typo and re-save).
+    }
+
     const [row] = await db
       .update(runners)
       .set({
-        bankName: input.bankName,
+        bankName: bank.name,
         bankAccountNumber: input.accountNumber,
-        bankAccountName: input.accountName,
+        bankAccountName: accountName,
+        bankCode: bank.code,
+        bankAccountVerified: verified,
+        // Any change to the account invalidates a previously-cached
+        // recipient — POST /me/payout recreates one lazily.
+        paystackRecipientCode: null,
       })
       .where(eq(runners.id, req.runnerId!))
       .returning();
 
     const activeErrandCount = await countActiveErrands(row.id);
     res.json({ user: { ...toRunner(row), activeErrandCount } });
+  })
+);
+
+// Bundles every currently-"released" escrow transaction for this runner
+// into one Paystack bank transfer. Requires a verified payout account
+// (see PATCH /me/payout-account) — an unverified one means Paystack
+// couldn't confirm the account number is real, and sending money to it
+// would be a mistake, not a retry-able failure. The escrow transactions
+// swept into this run stay "released" (not yet "disbursed") until the
+// transfer.success webhook confirms the money actually moved — see
+// routes/wallet.ts's paystack webhook handler for that leg.
+router.post(
+  "/me/payout",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const runner = await loadOwnRunner(req.runnerId!);
+
+    if (!runner.bankName || !runner.bankAccountNumber || !runner.bankAccountName || !runner.bankCode) {
+      throw AppErrors.validation("Add a payout account before requesting a payout");
+    }
+    if (!runner.bankAccountVerified) {
+      throw AppErrors.validation("Your payout account couldn't be verified — check the details and re-save it");
+    }
+
+    const releasedRows = await db
+      .select({ id: escrowTransactions.id, runnerPayout: escrowTransactions.runnerPayout })
+      .from(escrowTransactions)
+      .where(and(eq(escrowTransactions.runnerId, req.runnerId!), eq(escrowTransactions.status, "released")));
+
+    const amount = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
+    if (amount <= 0) {
+      throw AppErrors.validation("Nothing to pay out yet");
+    }
+
+    let recipientCode = runner.paystackRecipientCode;
+    if (!recipientCode) {
+      recipientCode = await createTransferRecipient({
+        accountNumber: runner.bankAccountNumber,
+        bankCode: runner.bankCode,
+        accountName: runner.bankAccountName,
+      });
+      await db.update(runners).set({ paystackRecipientCode: recipientCode }).where(eq(runners.id, runner.id));
+    }
+
+    const reference = `gracerandly-payout-${randomUUID()}`;
+    const transactionIds = releasedRows.map((row) => row.id);
+
+    const [payoutRow] = await db
+      .insert(runnerPayouts)
+      .values({
+        runnerId: runner.id,
+        amount,
+        status: "pending",
+        transactionIds,
+        providerReference: reference,
+      })
+      .returning();
+
+    try {
+      await initiateTransfer({
+        amountNaira: amount,
+        recipientCode,
+        reference,
+        reason: `Gracerandly earnings payout — ${transactionIds.length} errand${transactionIds.length === 1 ? "" : "s"}`,
+      });
+    } catch (err) {
+      await db
+        .update(runnerPayouts)
+        .set({ status: "failed", failureReason: err instanceof Error ? err.message : "Transfer failed" })
+        .where(eq(runnerPayouts.id, payoutRow.id));
+      throw AppErrors.validation("Couldn't start the transfer — try again in a moment");
+    }
+
+    res.status(201).json({ payout: toRunnerPayout(payoutRow) });
+  })
+);
+
+// Payout history for the Profile page — most recent first.
+router.get(
+  "/me/payouts",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const rows = await db
+      .select()
+      .from(runnerPayouts)
+      .where(eq(runnerPayouts.runnerId, req.runnerId!))
+      .orderBy(desc(runnerPayouts.createdAt));
+
+    res.json({ payouts: rows.map(toRunnerPayout) });
   })
 );
 
@@ -297,19 +433,44 @@ router.get(
   "/me/earnings",
   requireRunnerAuth,
   asyncHandler(async (req, res) => {
-    const [completedRows, releasedRows] = await Promise.all([
+    const [completedRows, earnedRows, pendingPayouts, successPayouts] = await Promise.all([
       db
         .select({ id: errands.id })
         .from(errands)
         .where(and(eq(errands.runnerId, req.runnerId!), eq(errands.status, "delivered"))),
+      // Lifetime earnings = every escrow transaction that ever became
+      // "released" (an errand delivered), whether or not it's since been
+      // paid out — "released" rows haven't been disbursed yet, "disbursed"
+      // rows have. availableBalance below is the released-only subset.
       db
-        .select({ runnerPayout: escrowTransactions.runnerPayout })
+        .select({ id: escrowTransactions.id, runnerPayout: escrowTransactions.runnerPayout, status: escrowTransactions.status })
         .from(escrowTransactions)
-        .where(and(eq(escrowTransactions.runnerId, req.runnerId!), eq(escrowTransactions.status, "released"))),
+        .where(
+          and(
+            eq(escrowTransactions.runnerId, req.runnerId!),
+            or(eq(escrowTransactions.status, "released"), eq(escrowTransactions.status, "disbursed"))
+          )
+        ),
+      db
+        .select({ transactionIds: runnerPayouts.transactionIds })
+        .from(runnerPayouts)
+        .where(and(eq(runnerPayouts.runnerId, req.runnerId!), eq(runnerPayouts.status, "pending"))),
+      db
+        .select({ amount: runnerPayouts.amount })
+        .from(runnerPayouts)
+        .where(and(eq(runnerPayouts.runnerId, req.runnerId!), eq(runnerPayouts.status, "success"))),
     ]);
 
-    const totalEarned = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
-    res.json({ totalEarned, completedErrandsCount: completedRows.length });
+    // "released" transactions already swept into a pending transfer
+    // aren't available to request again — see POST /me/payout.
+    const inFlightIds = new Set(pendingPayouts.flatMap((p) => p.transactionIds));
+    const totalEarned = earnedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
+    const availableBalance = earnedRows
+      .filter((row) => row.status === "released" && !inFlightIds.has(row.id))
+      .reduce((sum, row) => sum + row.runnerPayout, 0);
+    const totalPaidOut = successPayouts.reduce((sum, row) => sum + row.amount, 0);
+
+    res.json({ totalEarned, availableBalance, totalPaidOut, completedErrandsCount: completedRows.length });
   })
 );
 
@@ -554,8 +715,10 @@ router.patch(
       // be delivered with no escrow transaction at all if the requester
       // never paid through the app. When one does exist, this is the
       // moment the payout amount is considered earned (GET /me/earnings
-      // sums "released" rows) — no money actually moves yet, this is
-      // bookkeeping ahead of the real disbursement flow (PRD 6.7).
+      // counts it toward totalEarned/availableBalance) — actual bank
+      // disbursement is a separate step the runner requests themselves
+      // (POST /me/payout), which is what moves this row from "released" to
+      // "disbursed".
       await db
         .update(escrowTransactions)
         .set({ status: "released", releasedAt: new Date() })

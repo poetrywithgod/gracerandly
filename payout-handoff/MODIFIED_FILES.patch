@@ -1,0 +1,929 @@
+diff --git a/apps/api/drizzle/meta/_journal.json b/apps/api/drizzle/meta/_journal.json
+index edbee48..9a6608d 100644
+--- a/apps/api/drizzle/meta/_journal.json
++++ b/apps/api/drizzle/meta/_journal.json
+@@ -57,6 +57,13 @@
+       "when": 1790407564394,
+       "tag": "0007_glossy_exiles",
+       "breakpoints": true
++    },
++    {
++      "idx": 8,
++      "version": "7",
++      "when": 1790431510363,
++      "tag": "0008_lean_iron_lad",
++      "breakpoints": true
+     }
+   ]
+ }
+\ No newline at end of file
+diff --git a/apps/api/src/db/schema.ts b/apps/api/src/db/schema.ts
+index 16dc4d0..c761d7f 100644
+--- a/apps/api/src/db/schema.ts
++++ b/apps/api/src/db/schema.ts
+@@ -87,14 +87,28 @@ export const runners = pgTable("runners", {
+   bvn: text("bvn"),
+   identityVerified: boolean("identity_verified").notNull().default(false),
+   guarantor: jsonb("guarantor").$type<Guarantor>(),
+-  // Where a runner's payout would land once real disbursement exists
+-  // (PRD 6.7) — collected now so the Profile page has somewhere to put
+-  // it, but nothing actually pays out to this yet. All three or none;
+-  // toRunner() in routes/runners.ts only builds the nested
+-  // `payoutAccount` object when all three are present.
++  // Where a runner's payout lands (PRD 6.7) — bankName/bankAccountNumber/
++  // bankAccountName are collected together; toRunner() in
++  // routes/runners.ts only builds the nested `payoutAccount` object when
++  // all three are present. bankCode is Paystack's numeric bank code,
++  // resolved server-side from bankName against their /bank list at save
++  // time (see lib/payments.ts's resolveBankCode) — needed to create a
++  // transfer recipient, never shown to the runner. bankAccountVerified
++  // flips true only once Paystack's account-resolve endpoint confirms the
++  // account number actually belongs to that bank (see PATCH
++  // /me/payout-account); a runner can save an account that failed
++  // resolution (typos happen, and Paystack's resolve endpoint doesn't
++  // cover every bank), but can't request a payout until it's true.
++  // paystackRecipientCode caches the transfer recipient Paystack returns
++  // so repeat payouts don't recreate one each time — cleared whenever the
++  // account details change, so a stale recipient never receives a
++  // transfer meant for a new account.
+   bankName: text("bank_name"),
+   bankAccountNumber: text("bank_account_number"),
+   bankAccountName: text("bank_account_name"),
++  bankCode: text("bank_code"),
++  bankAccountVerified: boolean("bank_account_verified").notNull().default(false),
++  paystackRecipientCode: text("paystack_recipient_code"),
+   trustTierLevel: trustTierLevelEnum("trust_tier_level").notNull().default("probationary"),
+   isOnline: boolean("is_online").notNull().default(false),
+   currentLocation: jsonb("current_location").$type<RunnerLocation>(),
+@@ -235,3 +249,35 @@ export const escrowTransactions = pgTable("escrow_transactions", {
+ 
+ export type EscrowTransactionRow = typeof escrowTransactions.$inferSelect;
+ export type NewEscrowTransactionRow = typeof escrowTransactions.$inferInsert;
++
++// Mirrors packages/shared-types' RunnerPayoutStatus union.
++export const runnerPayoutStatusEnum = pgEnum("runner_payout_status", ["pending", "success", "failed"]);
++
++// Mirrors packages/shared-types' RunnerPayout interface.
++//
++// One row per payout *run*, not per errand — POST /runners/me/payout
++// bundles every currently-"released" escrow_transactions row for that
++// runner into a single Paystack transfer. transactionIds freezes which
++// rows were included at request time, so a transaction that becomes
++// released later (a different delivery, mid-flight) isn't accidentally
++// swept into this payout when the webhook later marks those same
++// transactions "disbursed" — see routes/runners.ts's POST /me/payout.
++export const runnerPayouts = pgTable("runner_payouts", {
++  id: uuid("id").primaryKey().defaultRandom(),
++  runnerId: uuid("runner_id")
++    .notNull()
++    .references(() => runners.id),
++  amount: integer("amount").notNull(),
++  status: runnerPayoutStatusEnum("status").notNull().default("pending"),
++  transactionIds: jsonb("transaction_ids").$type<string[]>().notNull(),
++  // Paystack's transfer_code — used to match the async transfer.success /
++  // transfer.failed / transfer.reversed webhook back to this row (same
++  // pattern as escrowTransactions.providerReference for pay-ins).
++  providerReference: text("provider_reference").notNull().unique(),
++  failureReason: text("failure_reason"),
++  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
++  completedAt: timestamp("completed_at", { withTimezone: true }),
++});
++
++export type RunnerPayoutRow = typeof runnerPayouts.$inferSelect;
++export type NewRunnerPayoutRow = typeof runnerPayouts.$inferInsert;
+diff --git a/apps/api/src/lib/payments.ts b/apps/api/src/lib/payments.ts
+index dc7bbeb..1b9a28d 100644
+--- a/apps/api/src/lib/payments.ts
++++ b/apps/api/src/lib/payments.ts
+@@ -113,6 +113,194 @@ export function verifyWebhookSignature(rawBody: Buffer, signatureHeader: string
+   return expected === signatureHeader;
+ }
+ 
++// ---------------------------------------------------------------------
++// Runner payout disbursement (PRD 6.7) — bank-transfer leg only. Vendor
++// disbursement (virtual card / USSD / cash float for the requester side)
++// is a separate, still-unbuilt flow; this is just "get a runner's
++// released earnings into their bank account."
++// ---------------------------------------------------------------------
++
++interface PaystackBank {
++  name: string;
++  code: string;
++  active: boolean;
++}
++
++// Paystack's bank list rarely changes and this endpoint is slow-ish, so
++// it's cached for the life of the process rather than fetched on every
++// payout-account save. Restart the API to pick up a newly-added bank —
++// fine in practice, since new banks are rare and this isn't user-facing.
++let bankListCache: PaystackBank[] | null = null;
++
++async function listBanks(): Promise<PaystackBank[]> {
++  if (bankListCache) return bankListCache;
++
++  const res = await fetch(`${PAYSTACK_BASE_URL}/bank?currency=NGN&country=nigeria`, {
++    headers: { Authorization: `Bearer ${getSecretKey()}` },
++  });
++  const data = (await res.json()) as { status: boolean; message: string; data?: PaystackBank[] };
++  if (!res.ok || !data.status || !data.data) {
++    throw new Error(`Paystack bank list failed: ${data.message ?? res.statusText}`);
++  }
++
++  bankListCache = data.data.filter((bank) => bank.active);
++  return bankListCache;
++}
++
++// Common abbreviations/short names Nigerian bank customers actually type
++// that don't appear as a substring of Paystack's canonical bank name
++// (e.g. "GTBank" vs "Guaranty Trust Bank") — checked before the generic
++// substring match below. Not exhaustive; new entries can be added as
++// runners report a bank that fails to resolve.
++const BANK_NAME_ALIASES: Record<string, string> = {
++  gtbank: "guaranty trust",
++  gtb: "guaranty trust",
++  uba: "united bank for africa",
++  fcmb: "first city monument",
++  "first bank": "first bank of nigeria",
++  firstbank: "first bank of nigeria",
++  stanbic: "stanbic ibtc",
++  polaris: "polaris bank",
++  wema: "wema bank",
++  keystone: "keystone bank",
++  fidelity: "fidelity bank",
++  union: "union bank",
++  sterling: "sterling bank",
++  ecobank: "ecobank nigeria",
++  heritage: "heritage bank",
++};
++
++/**
++ * Matches a runner's free-typed bank name (e.g. "GTBank", "First Bank")
++ * against Paystack's canonical bank list. Tries a known alias first (see
++ * BANK_NAME_ALIASES — plain substring matching misses common
++ * abbreviations that aren't textually contained in the official name),
++ * then falls back to case-insensitive substring matching in either
++ * direction. Returns null rather than throwing when nothing matches: an
++ * unrecognized bank name is an expected, recoverable case the caller
++ * decides how to handle (see routes/runners.ts), not a system failure.
++ */
++export async function resolveBankCode(bankNameInput: string): Promise<{ code: string; name: string } | null> {
++  const banks = await listBanks();
++  const input = bankNameInput.trim().toLowerCase();
++  const aliasTarget = BANK_NAME_ALIASES[input];
++
++  const find = (needle: string) =>
++    banks.find((bank) => {
++      const name = bank.name.toLowerCase();
++      return name === needle || name.includes(needle) || needle.includes(name);
++    });
++
++  const match = (aliasTarget && find(aliasTarget)) || find(input);
++  return match ? { code: match.code, name: match.name } : null;
++}
++
++interface ResolvedAccount {
++  accountNumber: string;
++  accountName: string;
++}
++
++/**
++ * Confirms an account number is real and returns the account name on
++ * file at the bank, via Paystack's /bank/resolve. Throws on a
++ * not-found/invalid account (a 4xx from Paystack) so callers can turn
++ * that into a validation error — this is meant to catch a mistyped
++ * account number before it's saved as "verified".
++ */
++export async function resolveAccountNumber(accountNumber: string, bankCode: string): Promise<ResolvedAccount> {
++  const res = await fetch(
++    `${PAYSTACK_BASE_URL}/bank/resolve?account_number=${encodeURIComponent(accountNumber)}&bank_code=${encodeURIComponent(bankCode)}`,
++    { headers: { Authorization: `Bearer ${getSecretKey()}` } }
++  );
++  const data = (await res.json()) as {
++    status: boolean;
++    message: string;
++    data?: { account_number: string; account_name: string };
++  };
++  if (!res.ok || !data.status || !data.data) {
++    throw new Error(data.message || "Could not verify this account number");
++  }
++  return { accountNumber: data.data.account_number, accountName: data.data.account_name };
++}
++
++interface CreateRecipientParams {
++  accountNumber: string;
++  bankCode: string;
++  accountName: string;
++}
++
++/** Creates a Paystack transfer recipient, returning its recipient_code —
++ * the handle a transfer is sent to. Callers should cache this
++ * (runners.paystackRecipientCode) rather than call this on every payout. */
++export async function createTransferRecipient(params: CreateRecipientParams): Promise<string> {
++  const res = await fetch(`${PAYSTACK_BASE_URL}/transferrecipient`, {
++    method: "POST",
++    headers: {
++      Authorization: `Bearer ${getSecretKey()}`,
++      "Content-Type": "application/json",
++    },
++    body: JSON.stringify({
++      type: "nuban",
++      name: params.accountName,
++      account_number: params.accountNumber,
++      bank_code: params.bankCode,
++      currency: "NGN",
++    }),
++  });
++  const data = (await res.json()) as {
++    status: boolean;
++    message: string;
++    data?: { recipient_code: string };
++  };
++  if (!res.ok || !data.status || !data.data) {
++    throw new Error(`Paystack recipient creation failed: ${data.message ?? res.statusText}`);
++  }
++  return data.data.recipient_code;
++}
++
++interface InitiateTransferParams {
++  amountNaira: number;
++  recipientCode: string;
++  reference: string;
++  reason: string;
++}
++
++interface InitiateTransferResult {
++  transferCode: string;
++  // Paystack returns "success" when OTP is disabled on the integration
++  // (the normal setup for a server-automated flow like this one) or
++  // "pending"/"otp" otherwise — the webhook is still the source of truth
++  // either way (see routes/wallet.ts's webhook handler), this is just
++  // what to show the runner immediately.
++  status: string;
++}
++
++export async function initiateTransfer(params: InitiateTransferParams): Promise<InitiateTransferResult> {
++  const res = await fetch(`${PAYSTACK_BASE_URL}/transfer`, {
++    method: "POST",
++    headers: {
++      Authorization: `Bearer ${getSecretKey()}`,
++      "Content-Type": "application/json",
++    },
++    body: JSON.stringify({
++      source: "balance",
++      amount: amountToKobo(params.amountNaira),
++      recipient: params.recipientCode,
++      reference: params.reference,
++      reason: params.reason,
++    }),
++  });
++  const data = (await res.json()) as {
++    status: boolean;
++    message: string;
++    data?: { transfer_code: string; status: string };
++  };
++  if (!res.ok || !data.status || !data.data) {
++    throw new Error(`Paystack transfer failed: ${data.message ?? res.statusText}`);
++  }
++  return { transferCode: data.data.transfer_code, status: data.data.status };
++}
++
+ // Placeholder platform commission — the real rate is a business decision
+ // that hasn't been made yet (see EscrowTransaction/VendorDisbursement in
+ // packages/shared-types for the fuller runner-payout model this feeds).
+diff --git a/apps/api/src/routes/runners.ts b/apps/api/src/routes/runners.ts
+index 2ee219c..0dfcee2 100644
+--- a/apps/api/src/routes/runners.ts
++++ b/apps/api/src/routes/runners.ts
+@@ -1,9 +1,10 @@
+ import { Router } from "express";
+-import { and, eq, inArray, or } from "drizzle-orm";
++import { randomUUID } from "node:crypto";
++import { and, desc, eq, inArray, or } from "drizzle-orm";
+ import bcrypt from "bcryptjs";
+ import { z } from "zod";
+ import { db } from "../db/client";
+-import { runners, errands, escrowTransactions } from "../db/schema";
++import { runners, errands, escrowTransactions, runnerPayouts } from "../db/schema";
+ import {
+   runnerSignupSchema,
+   runnerLoginSchema,
+@@ -26,7 +27,8 @@ import {
+   isWithinGeofence,
+   milesToMeters,
+ } from "../lib/matching";
+-import type { Errand, ErrandStatus, Runner } from "@gracerandly/shared-types";
++import { resolveBankCode, resolveAccountNumber, createTransferRecipient, initiateTransfer } from "../lib/payments";
++import type { Errand, ErrandStatus, Runner, RunnerPayout } from "@gracerandly/shared-types";
+ 
+ const router: Router = Router();
+ 
+@@ -71,6 +73,7 @@ function toRunner(row: typeof runners.$inferSelect): Runner {
+             bankName: row.bankName,
+             accountNumber: row.bankAccountNumber,
+             accountName: row.bankAccountName,
++            verified: row.bankAccountVerified,
+           }
+         : undefined,
+     trustTierId: row.trustTierLevel,
+@@ -113,6 +116,19 @@ function toErrand(row: typeof errands.$inferSelect): Errand {
+   };
+ }
+ 
++function toRunnerPayout(row: typeof runnerPayouts.$inferSelect): RunnerPayout {
++  return {
++    id: row.id,
++    runnerId: row.runnerId,
++    amount: row.amount,
++    status: row.status,
++    transactionIds: row.transactionIds,
++    failureReason: row.failureReason ?? undefined,
++    createdAt: row.createdAt.toISOString(),
++    completedAt: row.completedAt?.toISOString() ?? undefined,
++  };
++}
++
+ /** Validates a route param as a UUID, throwing 404 (not a validation
+  * error) on anything else — matches routes/errands.ts's loadOwnErrand. */
+ function parseErrandId(id: unknown): string {
+@@ -260,21 +276,52 @@ router.patch(
+   })
+ );
+ 
+-// Where a runner's payout would land once real disbursement exists (PRD
+-// 6.7) — see schema.ts's bankName/bankAccountNumber/bankAccountName
+-// comment. Nothing actually pays out to this yet.
++// Where a runner's payout lands (PRD 6.7). Resolves the typed bank name
++// against Paystack's bank list (fails the whole save if it's not
++// recognized — no bank code means we could never pay out to this account
++// anyway) and, when that succeeds, verifies the account number actually
++// belongs to that bank. A resolve failure at that second step doesn't
++// block the save — Paystack's resolve endpoint has real, legitimate
++// misses — but the account is stored unverified, and POST /me/payout
++// refuses to run until it's verified. A resolved account's name (the
++// bank's record, not what the runner typed) overwrites accountName, since
++// that's the name that has to match for a transfer to succeed.
+ router.patch(
+   "/me/payout-account",
+   requireRunnerAuth,
+   asyncHandler(async (req, res) => {
+     const input = updatePayoutAccountSchema.parse(req.body);
+ 
++    const bank = await resolveBankCode(input.bankName);
++    if (!bank) {
++      throw AppErrors.validation(
++        `We don't recognize "${input.bankName}" as a bank — check the spelling and try again`
++      );
++    }
++
++    let accountName = input.accountName;
++    let verified = false;
++    try {
++      const resolved = await resolveAccountNumber(input.accountNumber, bank.code);
++      accountName = resolved.accountName;
++      verified = true;
++    } catch {
++      // Left unverified — see comment above. The runner can still see and
++      // edit what they saved; they just can't be paid out until this
++      // resolves (or they fix a typo and re-save).
++    }
++
+     const [row] = await db
+       .update(runners)
+       .set({
+-        bankName: input.bankName,
++        bankName: bank.name,
+         bankAccountNumber: input.accountNumber,
+-        bankAccountName: input.accountName,
++        bankAccountName: accountName,
++        bankCode: bank.code,
++        bankAccountVerified: verified,
++        // Any change to the account invalidates a previously-cached
++        // recipient — POST /me/payout recreates one lazily.
++        paystackRecipientCode: null,
+       })
+       .where(eq(runners.id, req.runnerId!))
+       .returning();
+@@ -284,6 +331,95 @@ router.patch(
+   })
+ );
+ 
++// Bundles every currently-"released" escrow transaction for this runner
++// into one Paystack bank transfer. Requires a verified payout account
++// (see PATCH /me/payout-account) — an unverified one means Paystack
++// couldn't confirm the account number is real, and sending money to it
++// would be a mistake, not a retry-able failure. The escrow transactions
++// swept into this run stay "released" (not yet "disbursed") until the
++// transfer.success webhook confirms the money actually moved — see
++// routes/wallet.ts's paystack webhook handler for that leg.
++router.post(
++  "/me/payout",
++  requireRunnerAuth,
++  asyncHandler(async (req, res) => {
++    const runner = await loadOwnRunner(req.runnerId!);
++
++    if (!runner.bankName || !runner.bankAccountNumber || !runner.bankAccountName || !runner.bankCode) {
++      throw AppErrors.validation("Add a payout account before requesting a payout");
++    }
++    if (!runner.bankAccountVerified) {
++      throw AppErrors.validation("Your payout account couldn't be verified — check the details and re-save it");
++    }
++
++    const releasedRows = await db
++      .select({ id: escrowTransactions.id, runnerPayout: escrowTransactions.runnerPayout })
++      .from(escrowTransactions)
++      .where(and(eq(escrowTransactions.runnerId, req.runnerId!), eq(escrowTransactions.status, "released")));
++
++    const amount = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
++    if (amount <= 0) {
++      throw AppErrors.validation("Nothing to pay out yet");
++    }
++
++    let recipientCode = runner.paystackRecipientCode;
++    if (!recipientCode) {
++      recipientCode = await createTransferRecipient({
++        accountNumber: runner.bankAccountNumber,
++        bankCode: runner.bankCode,
++        accountName: runner.bankAccountName,
++      });
++      await db.update(runners).set({ paystackRecipientCode: recipientCode }).where(eq(runners.id, runner.id));
++    }
++
++    const reference = `gracerandly-payout-${randomUUID()}`;
++    const transactionIds = releasedRows.map((row) => row.id);
++
++    const [payoutRow] = await db
++      .insert(runnerPayouts)
++      .values({
++        runnerId: runner.id,
++        amount,
++        status: "pending",
++        transactionIds,
++        providerReference: reference,
++      })
++      .returning();
++
++    try {
++      await initiateTransfer({
++        amountNaira: amount,
++        recipientCode,
++        reference,
++        reason: `Gracerandly earnings payout — ${transactionIds.length} errand${transactionIds.length === 1 ? "" : "s"}`,
++      });
++    } catch (err) {
++      await db
++        .update(runnerPayouts)
++        .set({ status: "failed", failureReason: err instanceof Error ? err.message : "Transfer failed" })
++        .where(eq(runnerPayouts.id, payoutRow.id));
++      throw AppErrors.validation("Couldn't start the transfer — try again in a moment");
++    }
++
++    res.status(201).json({ payout: toRunnerPayout(payoutRow) });
++  })
++);
++
++// Payout history for the Profile page — most recent first.
++router.get(
++  "/me/payouts",
++  requireRunnerAuth,
++  asyncHandler(async (req, res) => {
++    const rows = await db
++      .select()
++      .from(runnerPayouts)
++      .where(eq(runnerPayouts.runnerId, req.runnerId!))
++      .orderBy(desc(runnerPayouts.createdAt));
++
++    res.json({ payouts: rows.map(toRunnerPayout) });
++  })
++);
++
+ // Lifetime earnings summary for the Profile page's stats row.
+ // totalEarned sums runnerPayout from escrow_transactions rows this
+ // runner's deliveries have been linked to (see the "delivered" branch of
+@@ -297,19 +433,44 @@ router.get(
+   "/me/earnings",
+   requireRunnerAuth,
+   asyncHandler(async (req, res) => {
+-    const [completedRows, releasedRows] = await Promise.all([
++    const [completedRows, earnedRows, pendingPayouts, successPayouts] = await Promise.all([
+       db
+         .select({ id: errands.id })
+         .from(errands)
+         .where(and(eq(errands.runnerId, req.runnerId!), eq(errands.status, "delivered"))),
++      // Lifetime earnings = every escrow transaction that ever became
++      // "released" (an errand delivered), whether or not it's since been
++      // paid out — "released" rows haven't been disbursed yet, "disbursed"
++      // rows have. availableBalance below is the released-only subset.
+       db
+-        .select({ runnerPayout: escrowTransactions.runnerPayout })
++        .select({ id: escrowTransactions.id, runnerPayout: escrowTransactions.runnerPayout, status: escrowTransactions.status })
+         .from(escrowTransactions)
+-        .where(and(eq(escrowTransactions.runnerId, req.runnerId!), eq(escrowTransactions.status, "released"))),
++        .where(
++          and(
++            eq(escrowTransactions.runnerId, req.runnerId!),
++            or(eq(escrowTransactions.status, "released"), eq(escrowTransactions.status, "disbursed"))
++          )
++        ),
++      db
++        .select({ transactionIds: runnerPayouts.transactionIds })
++        .from(runnerPayouts)
++        .where(and(eq(runnerPayouts.runnerId, req.runnerId!), eq(runnerPayouts.status, "pending"))),
++      db
++        .select({ amount: runnerPayouts.amount })
++        .from(runnerPayouts)
++        .where(and(eq(runnerPayouts.runnerId, req.runnerId!), eq(runnerPayouts.status, "success"))),
+     ]);
+ 
+-    const totalEarned = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
+-    res.json({ totalEarned, completedErrandsCount: completedRows.length });
++    // "released" transactions already swept into a pending transfer
++    // aren't available to request again — see POST /me/payout.
++    const inFlightIds = new Set(pendingPayouts.flatMap((p) => p.transactionIds));
++    const totalEarned = earnedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
++    const availableBalance = earnedRows
++      .filter((row) => row.status === "released" && !inFlightIds.has(row.id))
++      .reduce((sum, row) => sum + row.runnerPayout, 0);
++    const totalPaidOut = successPayouts.reduce((sum, row) => sum + row.amount, 0);
++
++    res.json({ totalEarned, availableBalance, totalPaidOut, completedErrandsCount: completedRows.length });
+   })
+ );
+ 
+@@ -554,8 +715,10 @@ router.patch(
+       // be delivered with no escrow transaction at all if the requester
+       // never paid through the app. When one does exist, this is the
+       // moment the payout amount is considered earned (GET /me/earnings
+-      // sums "released" rows) — no money actually moves yet, this is
+-      // bookkeeping ahead of the real disbursement flow (PRD 6.7).
++      // counts it toward totalEarned/availableBalance) — actual bank
++      // disbursement is a separate step the runner requests themselves
++      // (POST /me/payout), which is what moves this row from "released" to
++      // "disbursed".
+       await db
+         .update(escrowTransactions)
+         .set({ status: "released", releasedAt: new Date() })
+diff --git a/apps/api/src/routes/wallet.ts b/apps/api/src/routes/wallet.ts
+index dc3cf43..1a6c0fd 100644
+--- a/apps/api/src/routes/wallet.ts
++++ b/apps/api/src/routes/wallet.ts
+@@ -1,9 +1,9 @@
+ import { Router } from "express";
+ import { randomUUID } from "node:crypto";
+-import { and, desc, eq } from "drizzle-orm";
++import { and, desc, eq, inArray } from "drizzle-orm";
+ import { z } from "zod";
+ import { db } from "../db/client";
+-import { escrowTransactions, errands, requesters } from "../db/schema";
++import { escrowTransactions, errands, requesters, runnerPayouts } from "../db/schema";
+ import { payForErrandSchema, verifyPaymentSchema } from "../schemas/wallet";
+ import { AppErrors } from "../lib/errors";
+ import { asyncHandler } from "../lib/asyncHandler";
+@@ -191,6 +191,48 @@ router.post(
+ // from the signature check instead). Always acknowledges with 200 quickly
+ // per their docs, even when the reference is unrecognized, so they don't
+ // retry indefinitely for something on our end that isn't transient.
++// Runner-payout leg of the same webhook — a transfer's outcome only ever
++// arrives asynchronously (there's no synchronous "did it work" the way
++// /wallet/verify gives pay-ins), so this webhook is the *only* place a
++// runner_payouts row leaves "pending". Matches on providerReference the
++// same way settleTransaction does for pay-ins; the status guard makes it
++// safe if Paystack retries the same event.
++async function settleRunnerPayout(reference: string, outcome: { success: boolean; failureReason?: string }) {
++  const [payout] = await db
++    .select()
++    .from(runnerPayouts)
++    .where(eq(runnerPayouts.providerReference, reference))
++    .limit(1);
++  if (!payout || payout.status !== "pending") return;
++
++  if (outcome.success) {
++    await db
++      .update(runnerPayouts)
++      .set({ status: "success", completedAt: new Date() })
++      .where(and(eq(runnerPayouts.id, payout.id), eq(runnerPayouts.status, "pending")));
++    // Only now do the swept-up escrow transactions move past "released" —
++    // see schema.ts's escrowTransactions comment on why "disbursed" was
++    // sitting unused until this flow existed.
++    await db
++      .update(escrowTransactions)
++      .set({ status: "disbursed" })
++      .where(
++        and(inArray(escrowTransactions.id, payout.transactionIds), eq(escrowTransactions.status, "released"))
++      );
++  } else {
++    await db
++      .update(runnerPayouts)
++      .set({
++        status: "failed",
++        completedAt: new Date(),
++        failureReason: outcome.failureReason ?? "Transfer failed",
++      })
++      .where(and(eq(runnerPayouts.id, payout.id), eq(runnerPayouts.status, "pending")));
++    // Left as "released" — POST /me/payout will pick these back up next
++    // time the runner requests a payout, no manual intervention needed.
++  }
++}
++
+ router.post(
+   "/paystack/webhook",
+   asyncHandler(async (req, res) => {
+@@ -201,24 +243,33 @@ router.post(
+       return;
+     }
+ 
+-    const event = req.body as { event?: string; data?: { reference?: string; amount?: number } };
+-    if (event.event !== "charge.success" || !event.data?.reference) {
+-      res.status(200).json({ received: true });
+-      return;
+-    }
++    const event = req.body as {
++      event?: string;
++      data?: { reference?: string; amount?: number; reason?: string };
++    };
+ 
+-    const [transaction] = await db
+-      .select()
+-      .from(escrowTransactions)
+-      .where(eq(escrowTransactions.providerReference, event.data.reference))
+-      .limit(1);
++    if (event.event === "charge.success" && event.data?.reference) {
++      const [transaction] = await db
++        .select()
++        .from(escrowTransactions)
++        .where(eq(escrowTransactions.providerReference, event.data.reference))
++        .limit(1);
+ 
+-    if (transaction && transaction.status === "pending") {
+-      await settleTransaction(
+-        transaction.id,
+-        { success: true, amountNaira: koboToAmount(event.data.amount ?? 0) },
+-        transaction.amount
+-      );
++      if (transaction && transaction.status === "pending") {
++        await settleTransaction(
++          transaction.id,
++          { success: true, amountNaira: koboToAmount(event.data.amount ?? 0) },
++          transaction.amount
++        );
++      }
++    } else if (
++      (event.event === "transfer.success" || event.event === "transfer.failed" || event.event === "transfer.reversed") &&
++      event.data?.reference
++    ) {
++      await settleRunnerPayout(event.data.reference, {
++        success: event.event === "transfer.success",
++        failureReason: event.data.reason,
++      });
+     }
+ 
+     res.status(200).json({ received: true });
+diff --git a/apps/runner/src/screens/ProfileScreen.tsx b/apps/runner/src/screens/ProfileScreen.tsx
+index 97a416d..629e745 100644
+--- a/apps/runner/src/screens/ProfileScreen.tsx
++++ b/apps/runner/src/screens/ProfileScreen.tsx
+@@ -55,6 +55,8 @@ const VEHICLE_LABELS: Record<VehicleType, string> = {
+ 
+ interface EarningsResponse {
+   totalEarned: number;
++  availableBalance: number;
++  totalPaidOut: number;
+   completedErrandsCount: number;
+ }
+ 
+@@ -95,6 +97,11 @@ export default function ProfileScreen() {
+   const [isSavingPayout, setIsSavingPayout] = useState(false);
+   const [payoutError, setPayoutError] = useState<string | null>(null);
+ 
++  // --- Payout request ---
++  const [isRequestingPayout, setIsRequestingPayout] = useState(false);
++  const [payoutRequestError, setPayoutRequestError] = useState<string | null>(null);
++  const [payoutRequestSuccess, setPayoutRequestSuccess] = useState<string | null>(null);
++
+   // --- Stats ---
+   const [errands, setErrands] = useState<Errand[] | null>(null);
+   const [earnings, setEarnings] = useState<EarningsResponse | null>(null);
+@@ -210,6 +217,25 @@ export default function ProfileScreen() {
+     }
+   }
+ 
++  async function handleRequestPayout() {
++    if (!token) return;
++    setPayoutRequestError(null);
++    setPayoutRequestSuccess(null);
++    setIsRequestingPayout(true);
++    try {
++      const { payout } = await apiFetch<{ payout: { amount: number } }>("/runners/me/payout", {
++        method: "POST",
++        headers: { Authorization: `Bearer ${token}` },
++      });
++      setPayoutRequestSuccess(`${formatNaira(payout.amount)} is on its way to your bank account`);
++      await loadStats(true);
++    } catch (err) {
++      setPayoutRequestError(err instanceof ApiError ? err.message : "Couldn't start the payout");
++    } finally {
++      setIsRequestingPayout(false);
++    }
++  }
++
+   async function handleSignOut() {
+     await signOut();
+   }
+@@ -335,6 +361,7 @@ export default function ProfileScreen() {
+                     <Text style={styles.rowLabel}>{user.payoutAccount.bankName}</Text>
+                     <Text style={styles.rowHint}>
+                       {user.payoutAccount.accountName} · {maskAccountNumber(user.payoutAccount.accountNumber)}
++                      {!user.payoutAccount.verified ? " · unverified" : ""}
+                     </Text>
+                   </>
+                 ) : (
+@@ -348,6 +375,36 @@ export default function ProfileScreen() {
+             </Pressable>
+           )}
+ 
++          {user.payoutAccount ? (
++            <View style={styles.card}>
++              <View style={styles.rowLeft}>
++                <Wallet size={20} color={theme.colors.primary} />
++                <View style={styles.rowLeftText}>
++                  <Text style={styles.rowLabel}>
++                    {earnings ? formatNaira(earnings.availableBalance) : "—"} available
++                  </Text>
++                  <Text style={styles.rowHint}>
++                    {earnings && earnings.totalPaidOut > 0
++                      ? `${formatNaira(earnings.totalPaidOut)} paid out so far`
++                      : "Paid out to your bank account"}
++                  </Text>
++                </View>
++              </View>
++              {payoutRequestError ? <Text style={styles.errorText}>{payoutRequestError}</Text> : null}
++              {payoutRequestSuccess ? <Text style={styles.rowHint}>{payoutRequestSuccess}</Text> : null}
++              <Button
++                label="Request payout"
++                onPress={handleRequestPayout}
++                loading={isRequestingPayout}
++                disabled={!earnings || earnings.availableBalance <= 0 || !user.payoutAccount.verified}
++                style={styles.editProfileButton}
++              />
++              {!user.payoutAccount.verified ? (
++                <Text style={styles.rowHint}>Re-save your payout account details to verify it first</Text>
++              ) : null}
++            </View>
++          ) : null}
++
+           <View style={styles.card}>
+             <Text style={styles.sectionTitle}>Trust tier</Text>
+             <Text style={styles.tierValue}>{TIER_LABELS[user.trustTierId] ?? user.trustTierId}</Text>
+diff --git a/packages/shared-types/src/transaction.ts b/packages/shared-types/src/transaction.ts
+index f76039f..9840255 100644
+--- a/packages/shared-types/src/transaction.ts
++++ b/packages/shared-types/src/transaction.ts
+@@ -15,6 +15,24 @@ export interface EscrowTransaction {
+   releasedAt?: string;
+ }
+ 
++// A payout run: one bank transfer to a runner covering some number of
++// "released" escrow transactions at once (see EscrowTransaction.status).
++// Not per-errand — a runner may have several released transactions
++// waiting when they request a payout, and this bundles them into a
++// single transfer.
++export type RunnerPayoutStatus = "pending" | "success" | "failed";
++
++export interface RunnerPayout {
++  id: string;
++  runnerId: string;
++  amount: number;
++  status: RunnerPayoutStatus;
++  transactionIds: string[];
++  failureReason?: string;
++  createdAt: string;
++  completedAt?: string;
++}
++
+ export interface VendorDisbursement {
+   id: string;
+   errandId: string;
+diff --git a/packages/shared-types/src/user.ts b/packages/shared-types/src/user.ts
+index 3a0ed71..a8d5017 100644
+--- a/packages/shared-types/src/user.ts
++++ b/packages/shared-types/src/user.ts
+@@ -43,12 +43,16 @@ export interface RunnerLocation {
+  * future route-optimization work), not used by matching or ETAs yet. */
+ export type VehicleType = "bicycle" | "motorcycle" | "car" | "on_foot";
+ 
+-/** Where a runner's payout would land once real disbursement exists
+- * (PRD 6.7). Undefined until all three fields are set. */
++/** Where a runner's payout would land (PRD 6.7). Undefined until all
++ * three fields are set. `verified` is true once Paystack has confirmed
++ * the account number resolves to a real NUBAN account at that bank —
++ * a runner can still save an unverified account, but can't request a
++ * payout until it's verified (see POST /runners/me/payout). */
+ export interface PayoutAccount {
+   bankName: string;
+   accountNumber: string;
+   accountName: string;
++  verified: boolean;
+ }
+ 
+ export interface Runner extends BaseUser {
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 220fc0b..b31ead9 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -337,6 +337,97 @@ importers:
+         specifier: ~6.0.3
+         version: 6.0.3
+ 
++  apps/runner:
++    dependencies:
++      '@expo-google-fonts/poppins':
++        specifier: ^0.4.1
++        version: 0.4.1
++      '@gracerandly/shared-types':
++        specifier: workspace:*
++        version: link:../../packages/shared-types
++      '@gracerandly/theme':
++        specifier: workspace:*
++        version: link:../../packages/theme
++      '@react-navigation/bottom-tabs':
++        specifier: ^7.19.2
++        version: 7.19.2(@react-navigation/native@7.4.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native-safe-area-context@5.7.0(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native-screens@4.26.2(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      '@react-navigation/native':
++        specifier: ^7.4.1
++        version: 7.4.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      '@react-navigation/native-stack':
++        specifier: ^7.19.2
++        version: 7.19.2(@react-navigation/native@7.4.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native-safe-area-context@5.7.0(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native-screens@4.26.2(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      '@supabase/supabase-js':
++        specifier: ^2.48.1
++        version: 2.116.0
++      country-telephone-data:
++        specifier: ^0.6.3
++        version: 0.6.3
++      expo:
++        specifier: ~57.0.24
++        version: 57.0.24(@babel/core@7.29.7(supports-color@8.1.1))(@expo/dom-webview@57.0.1)(react-native-webview@13.16.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@6.0.3)
++      expo-blur:
++        specifier: ~57.0.3
++        version: 57.0.3(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      expo-constants:
++        specifier: ~57.0.19
++        version: 57.0.19(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(supports-color@8.1.1)
++      expo-font:
++        specifier: ~57.0.4
++        version: 57.0.4(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      expo-image-manipulator:
++        specifier: ~57.0.19
++        version: 57.0.19(expo@57.0.24)
++      expo-image-picker:
++        specifier: ~57.0.19
++        version: 57.0.19(expo@57.0.24)
++      expo-linear-gradient:
++        specifier: ~57.0.2
++        version: 57.0.2(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      expo-linking:
++        specifier: ~57.0.10
++        version: 57.0.10(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)
++      expo-location:
++        specifier: ~57.0.19
++        version: 57.0.19(expo@57.0.24)(supports-color@8.1.1)(typescript@6.0.3)
++      expo-secure-store:
++        specifier: ^57.0.4
++        version: 57.0.4(expo@57.0.24)
++      expo-splash-screen:
++        specifier: ~57.0.9
++        version: 57.0.9(expo@57.0.24)(supports-color@8.1.1)(typescript@6.0.3)
++      expo-status-bar:
++        specifier: ~57.0.1
++        version: 57.0.1(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      lucide-react-native:
++        specifier: ^1.47.0
++        version: 1.47.0(react-native-svg@15.15.4(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      react:
++        specifier: 19.2.3
++        version: 19.2.3
++      react-native:
++        specifier: 0.86.3
++        version: 0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1)
++      react-native-safe-area-context:
++        specifier: ~5.7.0
++        version: 5.7.0(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      react-native-screens:
++        specifier: ~4.26.2
++        version: 4.26.2(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++      react-native-svg:
++        specifier: 15.15.4
++        version: 15.15.4(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
++    devDependencies:
++      '@types/country-telephone-data':
++        specifier: ^0.6.3
++        version: 0.6.3
++      '@types/react':
++        specifier: ~19.2.2
++        version: 19.2.18
++      typescript:
++        specifier: ~6.0.3
++        version: 6.0.3
++
+   packages/shared-types:
+     devDependencies:
+       typescript:

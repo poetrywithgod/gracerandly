@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
-import { escrowTransactions, errands, requesters } from "../db/schema";
+import { escrowTransactions, errands, requesters, runnerPayouts } from "../db/schema";
 import { payForErrandSchema, verifyPaymentSchema } from "../schemas/wallet";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -191,6 +191,48 @@ router.post(
 // from the signature check instead). Always acknowledges with 200 quickly
 // per their docs, even when the reference is unrecognized, so they don't
 // retry indefinitely for something on our end that isn't transient.
+// Runner-payout leg of the same webhook — a transfer's outcome only ever
+// arrives asynchronously (there's no synchronous "did it work" the way
+// /wallet/verify gives pay-ins), so this webhook is the *only* place a
+// runner_payouts row leaves "pending". Matches on providerReference the
+// same way settleTransaction does for pay-ins; the status guard makes it
+// safe if Paystack retries the same event.
+async function settleRunnerPayout(reference: string, outcome: { success: boolean; failureReason?: string }) {
+  const [payout] = await db
+    .select()
+    .from(runnerPayouts)
+    .where(eq(runnerPayouts.providerReference, reference))
+    .limit(1);
+  if (!payout || payout.status !== "pending") return;
+
+  if (outcome.success) {
+    await db
+      .update(runnerPayouts)
+      .set({ status: "success", completedAt: new Date() })
+      .where(and(eq(runnerPayouts.id, payout.id), eq(runnerPayouts.status, "pending")));
+    // Only now do the swept-up escrow transactions move past "released" —
+    // see schema.ts's escrowTransactions comment on why "disbursed" was
+    // sitting unused until this flow existed.
+    await db
+      .update(escrowTransactions)
+      .set({ status: "disbursed" })
+      .where(
+        and(inArray(escrowTransactions.id, payout.transactionIds), eq(escrowTransactions.status, "released"))
+      );
+  } else {
+    await db
+      .update(runnerPayouts)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        failureReason: outcome.failureReason ?? "Transfer failed",
+      })
+      .where(and(eq(runnerPayouts.id, payout.id), eq(runnerPayouts.status, "pending")));
+    // Left as "released" — POST /me/payout will pick these back up next
+    // time the runner requests a payout, no manual intervention needed.
+  }
+}
+
 router.post(
   "/paystack/webhook",
   asyncHandler(async (req, res) => {
@@ -201,24 +243,33 @@ router.post(
       return;
     }
 
-    const event = req.body as { event?: string; data?: { reference?: string; amount?: number } };
-    if (event.event !== "charge.success" || !event.data?.reference) {
-      res.status(200).json({ received: true });
-      return;
-    }
+    const event = req.body as {
+      event?: string;
+      data?: { reference?: string; amount?: number; reason?: string };
+    };
 
-    const [transaction] = await db
-      .select()
-      .from(escrowTransactions)
-      .where(eq(escrowTransactions.providerReference, event.data.reference))
-      .limit(1);
+    if (event.event === "charge.success" && event.data?.reference) {
+      const [transaction] = await db
+        .select()
+        .from(escrowTransactions)
+        .where(eq(escrowTransactions.providerReference, event.data.reference))
+        .limit(1);
 
-    if (transaction && transaction.status === "pending") {
-      await settleTransaction(
-        transaction.id,
-        { success: true, amountNaira: koboToAmount(event.data.amount ?? 0) },
-        transaction.amount
-      );
+      if (transaction && transaction.status === "pending") {
+        await settleTransaction(
+          transaction.id,
+          { success: true, amountNaira: koboToAmount(event.data.amount ?? 0) },
+          transaction.amount
+        );
+      }
+    } else if (
+      (event.event === "transfer.success" || event.event === "transfer.failed" || event.event === "transfer.reversed") &&
+      event.data?.reference
+    ) {
+      await settleRunnerPayout(event.data.reference, {
+        success: event.event === "transfer.success",
+        failureReason: event.data.reason,
+      });
     }
 
     res.status(200).json({ received: true });
