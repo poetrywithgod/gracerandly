@@ -12,6 +12,7 @@ export type MainStackParamList = {
   Tabs: undefined;
   ErrandDetail: { errandId: string };
   Verification: undefined;
+  Chat: { errandId: string };
 };
 
 export type RootStackParamList = {

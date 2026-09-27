@@ -27,6 +27,7 @@
     "express": "^4.21.1",
     "jsonwebtoken": "^9.0.3",
     "postgres": "^3.4.9",
+    "ws": "^8.19.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -35,6 +36,7 @@
     "@types/express": "^5.0.0",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.9.0",
+    "@types/ws": "^8.5.13",
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"

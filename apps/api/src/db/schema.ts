@@ -352,3 +352,33 @@ export const vendorDisbursements = pgTable("vendor_disbursements", {
 
 export type VendorDisbursementRow = typeof vendorDisbursements.$inferSelect;
 export type NewVendorDisbursementRow = typeof vendorDisbursements.$inferInsert;
+
+// Mirrors packages/shared-types' ChatMessage's senderRole field.
+export const chatSenderRoleEnum = pgEnum("chat_sender_role", ["requester", "runner"]);
+
+// Mirrors packages/shared-types' ChatMessage interface — but this table is
+// a delivery queue, not a chat history. A row exists only from the moment
+// a message is sent until the recipient's WebSocket connection
+// acknowledges receiving it (see lib/chat-server.ts), at which point it's
+// deleted. The *actual* chat history lives only on each device's own
+// local storage (apps/runner's lib/chatDb.ts) — this table's whole job is
+// getting a message from one phone to the other, same model WhatsApp's
+// servers use (store only until delivered, never a permanent archive).
+//
+// senderId isn't a foreign key, since it can point at either requesters.id
+// or runners.id depending on senderRole — Drizzle doesn't support a
+// conditional/polymorphic reference, so this is validated in code (see
+// lib/chat-server.ts's connection handshake) rather than by the schema.
+export const chatMessages = pgTable("chat_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  errandId: uuid("errand_id")
+    .notNull()
+    .references(() => errands.id),
+  senderRole: chatSenderRoleEnum("sender_role").notNull(),
+  senderId: uuid("sender_id").notNull(),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type ChatMessageRow = typeof chatMessages.$inferSelect;
+export type NewChatMessageRow = typeof chatMessages.$inferInsert;

@@ -15,6 +15,17 @@ const theme = getTheme("light");
 
 type Props = NativeStackScreenProps<MainStackParamList, "ErrandDetail">;
 
+// Mirrors apps/api's lib/chat-server.ts CHAT_ALLOWED_STATUSES — chat only
+// makes sense once a runner's actually attached to the errand, through
+// delivery.
+const CHAT_ALLOWED_STATUSES: ErrandStatus[] = [
+  "accepted",
+  "en_route_to_pickup",
+  "in_progress",
+  "en_route_to_delivery",
+  "delivered",
+];
+
 // Statuses where the runner has an errand in hand and should be
 // broadcasting position for the requester's live tracking map.
 const TRACKING_STATUSES: ErrandStatus[] = ["en_route_to_pickup", "in_progress", "en_route_to_delivery"];
@@ -30,7 +41,7 @@ const NEXT_STEP: Partial<Record<ErrandStatus, { label: string; next: ErrandStatu
   en_route_to_delivery: { label: "Confirm delivery", next: "delivered", needsGeofence: "dropoff", needsPin: true },
 };
 
-export default function ErrandDetailScreen({ route }: Props) {
+export default function ErrandDetailScreen({ route, navigation }: Props) {
   const { errandId } = route.params;
   const { token } = useAuth();
 
@@ -153,6 +164,11 @@ export default function ErrandDetailScreen({ route }: Props) {
       <View style={styles.card}>
         <Text style={styles.status}>{errand.status.replace(/_/g, " ")}</Text>
         <Text style={styles.cost}>₦{errand.estimatedCost.toLocaleString()}</Text>
+        {CHAT_ALLOWED_STATUSES.includes(errand.status) ? (
+          <Text style={styles.chatLink} onPress={() => navigation.navigate("Chat", { errandId: errand.id })}>
+            Message requester
+          </Text>
+        ) : null}
       </View>
 
       <View style={styles.card}>
@@ -213,6 +229,7 @@ const styles = StyleSheet.create({
   },
   status: { fontFamily: theme.fonts.uiSemibold, fontSize: 16, color: theme.colors.primaryDark, textTransform: "capitalize" },
   cost: { fontFamily: theme.fonts.uiSemibold, fontSize: 20, color: theme.colors.text },
+  chatLink: { fontFamily: theme.fonts.uiMedium, fontSize: 14, color: theme.colors.primary, marginTop: 4 },
   sectionLabel: { fontFamily: theme.fonts.uiMedium, fontSize: 12, color: theme.colors.textMuted, textTransform: "uppercase", marginTop: 6 },
   address: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.text },
   itemLine: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.text },

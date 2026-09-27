@@ -11,6 +11,7 @@ import errandsRouter from "./routes/errands";
 import walletRouter from "./routes/wallet";
 import runnersRouter from "./routes/runners";
 import { errorHandler } from "./middleware/errorHandler";
+import { attachChatServer } from "./lib/chat-server";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -60,6 +61,10 @@ app.use("/runners", runnersRouter);
 // by its four-argument signature.
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`Gracerandly API running on port ${PORT}`);
 });
+
+// Chat runs on the same HTTP server/port as the REST API (path /ws/chat)
+// rather than a separate port — one less thing to configure/expose.
+attachChatServer(httpServer);

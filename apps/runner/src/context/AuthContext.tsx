@@ -64,8 +64,9 @@ interface AuthContextValue {
   /** Sets or clears (pass null) the profile photo — see routes/runners.ts's
    * PATCH /me/avatar. */
   updateAvatar: (imageDataUri: string | null) => Promise<void>;
-  /** Sets where payouts would land once real disbursement exists — see
-   * routes/runners.ts's PATCH /me/payout-account. */
+  /** Sets or clears the runner's payout account — see routes/runners.ts's
+   * PATCH /me/payout-account. Verified against Paystack before it's saved;
+   * see ProfileScreen for the "unverified" state this can leave it in. */
   updatePayoutAccount: (details: PayoutAccountDetails) => Promise<void>;
   /** Updates isOnline (and, when going online, the runner's current
    * position) both on the server and in local state. Screens that need to
