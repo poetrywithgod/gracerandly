@@ -193,6 +193,9 @@ export const errands = pgTable("errands", {
   isRecurring: boolean("is_recurring").notNull().default(false),
   recurrenceRule: text("recurrence_rule"),
   estimatedCost: integer("estimated_cost").notNull(),
+  // Mirrors packages/shared-types' Errand.itemsBudget comment — money for
+  // the runner to actually buy the items, separate from estimatedCost.
+  itemsBudget: integer("items_budget").notNull().default(0),
   finalCost: integer("final_cost"),
   sequenceOrder: integer("sequence_order"),
   deliveryPin: text("delivery_pin"),
@@ -207,9 +210,9 @@ export const errands = pgTable("errands", {
 export type ErrandRow = typeof errands.$inferSelect;
 export type NewErrandRow = typeof errands.$inferInsert;
 
-// Mirrors packages/shared-types' TransactionStatus union (a subset of it —
-// "disbursed" belongs to the Runner-payout leg, which isn't wired up yet;
-// this MVP only ever reaches "escrowed", "released", "refunded", "failed").
+// Mirrors packages/shared-types' TransactionStatus union. "disbursed" is
+// the runner-payout leg (see runnerPayouts below) — a "released" row
+// becomes "disbursed" once its bank transfer actually settles.
 export const transactionStatusEnum = pgEnum("transaction_status", [
   "pending",
   "escrowed",
@@ -223,10 +226,11 @@ export const transactionStatusEnum = pgEnum("transaction_status", [
 //
 // One row per payment attempt (not per errand — a failed attempt can be
 // retried, which creates a new row rather than overwriting the old one).
-// runnerPayout is calculated and stored but still never actually
-// disbursed anywhere yet — that's the vendor-disbursement flow from PRD
-// 6.7, still unbuilt; only the requester-facing pay-in (this table's real
-// job right now) is live.
+// amount/commissionAmount/runnerPayout are the delivery/service-fee split
+// (estimatedCost); itemsBudget/itemsSpent are the separate pool vendor
+// disbursements draw from (see vendorDisbursements below) — the two never
+// mix, so a runner's earnings can never accidentally include money meant
+// for a vendor.
 export const escrowTransactions = pgTable("escrow_transactions", {
   id: uuid("id").primaryKey().defaultRandom(),
   errandId: uuid("errand_id")
@@ -239,6 +243,13 @@ export const escrowTransactions = pgTable("escrow_transactions", {
   amount: integer("amount").notNull(),
   commissionAmount: integer("commission_amount").notNull(),
   runnerPayout: integer("runner_payout").notNull(),
+  // Captured from errands.itemsBudget at payment time (see routes/wallet.ts's
+  // pay route) — a later edit to the errand can't retroactively change what
+  // was actually escrowed. itemsSpent only ever increases, and only via a
+  // *successful* vendor disbursement (routes/wallet.ts's webhook handler) —
+  // a failed one leaves the budget untouched so the runner can retry.
+  itemsBudget: integer("items_budget").notNull().default(0),
+  itemsSpent: integer("items_spent").notNull().default(0),
   status: transactionStatusEnum("status").notNull().default("pending"),
   // Paystack's transaction reference — handed to them at initialize time,
   // matched back against at verify time (manual verify or their webhook).
@@ -281,3 +292,63 @@ export const runnerPayouts = pgTable("runner_payouts", {
 
 export type RunnerPayoutRow = typeof runnerPayouts.$inferSelect;
 export type NewRunnerPayoutRow = typeof runnerPayouts.$inferInsert;
+
+// Mirrors packages/shared-types' DisbursementMethod union. Only
+// "bank_transfer" is implemented (routes/runners.ts's POST
+// /errands/:id/vendor-disbursements rejects the other three) — modeled
+// here so the column doesn't need to change shape when they are.
+export const disbursementMethodEnum = pgEnum("disbursement_method", [
+  "virtual_card",
+  "bank_transfer",
+  "ussd",
+  "cash_float",
+]);
+
+// Mirrors packages/shared-types' VendorDisbursementStatus union.
+export const vendorDisbursementStatusEnum = pgEnum("vendor_disbursement_status", ["pending", "success", "failed"]);
+
+// Mirrors packages/shared-types' VendorDisbursement interface.
+//
+// One row per purchase — unlike runnerPayouts, these aren't bundled;
+// each trip to a vendor gets its own transfer, since the runner types in
+// that vendor's own bank details fresh each time (no cached recipient the
+// way runners.paystackRecipientCode caches a runner's own account, since a
+// vendor is rarely used twice). Draws down its errand's escrow_transactions
+// row's itemsBudget — see that table's comment.
+export const vendorDisbursements = pgTable("vendor_disbursements", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  errandId: uuid("errand_id")
+    .notNull()
+    .references(() => errands.id),
+  runnerId: uuid("runner_id")
+    .notNull()
+    .references(() => runners.id),
+  vendorName: text("vendor_name").notNull(),
+  method: disbursementMethodEnum("method").notNull(),
+  amount: integer("amount").notNull(),
+  // Only populated for method="bank_transfer". bankAccountName is the name
+  // Paystack's resolve endpoint returned, not necessarily what the runner
+  // typed — see the route for why (same reasoning as a runner's own
+  // payout account, but stricter: there's no unverified state here, a
+  // vendor transfer either resolves or is rejected outright).
+  bankName: text("bank_name"),
+  bankCode: text("bank_code"),
+  bankAccountNumber: text("bank_account_number"),
+  bankAccountName: text("bank_account_name"),
+  status: vendorDisbursementStatusEnum("status").notNull().default("pending"),
+  // Paystack's transfer reference — same settlement pattern as
+  // runnerPayouts.providerReference, via the same webhook handler.
+  providerReference: text("provider_reference").unique(),
+  failureReason: text("failure_reason"),
+  receiptPhotoUrl: text("receipt_photo_url"),
+  // Whether the runner's device location was within the pickup geofence
+  // when they made this purchase — an audit/trust signal (PRD 6.7), not a
+  // hard block: shopping online from a vendor who takes bank transfer is
+  // legitimate even off-site, so this never rejects a request on its own.
+  geoVerified: boolean("geo_verified").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+});
+
+export type VendorDisbursementRow = typeof vendorDisbursements.$inferSelect;
+export type NewVendorDisbursementRow = typeof vendorDisbursements.$inferInsert;

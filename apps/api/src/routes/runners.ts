@@ -4,7 +4,7 @@ import { and, desc, eq, inArray, or } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { db } from "../db/client";
-import { runners, errands, escrowTransactions, runnerPayouts } from "../db/schema";
+import { runners, errands, escrowTransactions, runnerPayouts, vendorDisbursements } from "../db/schema";
 import {
   runnerSignupSchema,
   runnerLoginSchema,
@@ -16,6 +16,7 @@ import {
   updateRunnerAvatarSchema,
   updatePayoutAccountSchema,
 } from "../schemas/runner";
+import { createVendorDisbursementSchema } from "../schemas/vendor-disbursement";
 import { signAuthToken } from "../lib/jwt";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -28,7 +29,7 @@ import {
   milesToMeters,
 } from "../lib/matching";
 import { resolveBankCode, resolveAccountNumber, createTransferRecipient, initiateTransfer } from "../lib/payments";
-import type { Errand, ErrandStatus, Runner, RunnerPayout } from "@gracerandly/shared-types";
+import type { Errand, ErrandStatus, Runner, RunnerPayout, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
 
@@ -107,6 +108,7 @@ function toErrand(row: typeof errands.$inferSelect): Errand {
     isRecurring: row.isRecurring,
     recurrenceRule: row.recurrenceRule ?? undefined,
     estimatedCost: row.estimatedCost,
+    itemsBudget: row.itemsBudget,
     finalCost: row.finalCost ?? undefined,
     sequenceOrder: row.sequenceOrder ?? undefined,
     deliveryPin: undefined,
@@ -123,6 +125,27 @@ function toRunnerPayout(row: typeof runnerPayouts.$inferSelect): RunnerPayout {
     amount: row.amount,
     status: row.status,
     transactionIds: row.transactionIds,
+    failureReason: row.failureReason ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    completedAt: row.completedAt?.toISOString() ?? undefined,
+  };
+}
+
+function toVendorDisbursement(row: typeof vendorDisbursements.$inferSelect): VendorDisbursement {
+  return {
+    id: row.id,
+    errandId: row.errandId,
+    runnerId: row.runnerId,
+    vendorName: row.vendorName,
+    method: row.method,
+    amount: row.amount,
+    status: row.status,
+    bankDetails:
+      row.bankName && row.bankAccountNumber && row.bankAccountName
+        ? { bankName: row.bankName, accountNumber: row.bankAccountNumber, accountName: row.bankAccountName }
+        : undefined,
+    receiptPhotoUrl: row.receiptPhotoUrl ?? undefined,
+    geoVerified: row.geoVerified,
     failureReason: row.failureReason ?? undefined,
     createdAt: row.createdAt.toISOString(),
     completedAt: row.completedAt?.toISOString() ?? undefined,
@@ -732,6 +755,123 @@ router.patch(
     }
 
     res.json({ errand: toErrand(row) });
+  })
+);
+
+// Money the runner spends at a vendor while shopping this errand — drawn
+// from the errand's itemsBudget, not the runner's own earnings (see
+// schema.ts's escrowTransactions comment). Only available while the
+// errand is "in_progress" (pickup confirmed, items not yet delivered) —
+// PRD 6.7's other three methods aren't wired up yet, so anything but
+// "bank_transfer" is rejected here rather than silently accepted and
+// never actually paid.
+router.post(
+  "/errands/:id/vendor-disbursements",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const input = createVendorDisbursementSchema.parse(req.body);
+    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
+
+    if (input.method !== "bank_transfer") {
+      throw AppErrors.validation(`${input.method.replace("_", " ")} isn't available yet — use bank transfer for now`);
+    }
+    if (existing.status !== "in_progress") {
+      throw AppErrors.conflict("You can only pay a vendor while an errand is in progress");
+    }
+
+    const [transaction] = await db
+      .select()
+      .from(escrowTransactions)
+      .where(and(eq(escrowTransactions.errandId, existing.id), eq(escrowTransactions.status, "escrowed")))
+      .limit(1);
+    if (!transaction) {
+      throw AppErrors.conflict("This errand doesn't have a funded items budget to spend from");
+    }
+
+    const pendingRows = await db
+      .select({ amount: vendorDisbursements.amount })
+      .from(vendorDisbursements)
+      .where(and(eq(vendorDisbursements.errandId, existing.id), eq(vendorDisbursements.status, "pending")));
+    const pendingTotal = pendingRows.reduce((sum, row) => sum + row.amount, 0);
+    const remaining = transaction.itemsBudget - transaction.itemsSpent - pendingTotal;
+    if (input.amount > remaining) {
+      throw AppErrors.validation(`Only ₦${remaining.toLocaleString()} left of this errand's items budget`);
+    }
+
+    // Unlike a runner's own payout account, there's no "save unverified,
+    // retry later" here — this is a one-off transfer of the requester's
+    // money to a third party, so an unresolved bank name or account
+    // number rejects the request outright rather than being stored.
+    const bank = await resolveBankCode(input.bankName!);
+    if (!bank) {
+      throw AppErrors.validation(`We don't recognize "${input.bankName}" as a bank — check the spelling`);
+    }
+    let resolvedAccountName: string;
+    try {
+      const resolved = await resolveAccountNumber(input.accountNumber!, bank.code);
+      resolvedAccountName = resolved.accountName;
+    } catch {
+      throw AppErrors.validation("Couldn't verify the vendor's account — check the account number and bank");
+    }
+
+    const recipientCode = await createTransferRecipient({
+      accountNumber: input.accountNumber!,
+      bankCode: bank.code,
+      accountName: resolvedAccountName,
+    });
+
+    const reference = `gracerandly-vendor-${randomUUID()}`;
+    const geoVerified = input.location ? isWithinGeofence(input.location, existing.pickup) : false;
+
+    const [disbursementRow] = await db
+      .insert(vendorDisbursements)
+      .values({
+        errandId: existing.id,
+        runnerId: req.runnerId!,
+        vendorName: input.vendorName,
+        method: "bank_transfer",
+        amount: input.amount,
+        bankName: bank.name,
+        bankCode: bank.code,
+        bankAccountNumber: input.accountNumber!,
+        bankAccountName: resolvedAccountName,
+        status: "pending",
+        providerReference: reference,
+        geoVerified,
+      })
+      .returning();
+
+    try {
+      await initiateTransfer({
+        amountNaira: input.amount,
+        recipientCode,
+        reference,
+        reason: `Gracerandly vendor payment — ${input.vendorName}`,
+      });
+    } catch (err) {
+      await db
+        .update(vendorDisbursements)
+        .set({ status: "failed", failureReason: err instanceof Error ? err.message : "Transfer failed" })
+        .where(eq(vendorDisbursements.id, disbursementRow.id));
+      throw AppErrors.validation("Couldn't start the transfer to the vendor — try again in a moment");
+    }
+
+    res.status(201).json({ disbursement: toVendorDisbursement(disbursementRow) });
+  })
+);
+
+router.get(
+  "/errands/:id/vendor-disbursements",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
+    const rows = await db
+      .select()
+      .from(vendorDisbursements)
+      .where(eq(vendorDisbursements.errandId, existing.id))
+      .orderBy(desc(vendorDisbursements.createdAt));
+
+    res.json({ disbursements: rows.map(toVendorDisbursement) });
   })
 );
 

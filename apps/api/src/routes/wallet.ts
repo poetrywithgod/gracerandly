@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
-import { escrowTransactions, errands, requesters, runnerPayouts } from "../db/schema";
+import { escrowTransactions, errands, requesters, runnerPayouts, vendorDisbursements } from "../db/schema";
 import { payForErrandSchema, verifyPaymentSchema } from "../schemas/wallet";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -28,6 +28,8 @@ function toEscrowTransaction(row: typeof escrowTransactions.$inferSelect): Escro
     amount: row.amount,
     commissionAmount: row.commissionAmount,
     runnerPayout: row.runnerPayout,
+    itemsBudget: row.itemsBudget,
+    itemsSpent: row.itemsSpent,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     releasedAt: row.releasedAt?.toISOString() ?? undefined,
@@ -38,7 +40,9 @@ function toEscrowTransaction(row: typeof escrowTransactions.$inferSelect): Escro
  * Applies a successful/failed verification result to a transaction row —
  * shared between the manual /verify endpoint and the webhook, so the two
  * paths (whichever fires first) behave identically and are safe to run
- * more than once for the same reference.
+ * more than once for the same reference. expectedAmount is the *total*
+ * Paystack charge (estimatedCost + itemsBudget), not just the delivery
+ * fee — see the pay route below.
  */
 async function settleTransaction(
   transactionId: string,
@@ -115,11 +119,12 @@ router.post(
     }
 
     const { commissionAmount, runnerPayout } = splitCommission(errand.estimatedCost);
+    const totalCharge = errand.estimatedCost + errand.itemsBudget;
     const reference = `gracerandly-${randomUUID()}`;
 
     const { authorizationUrl } = await initializeTransaction({
       email: requester.email,
-      amountNaira: errand.estimatedCost,
+      amountNaira: totalCharge,
       reference,
       callbackUrl: input.callbackUrl,
     });
@@ -130,6 +135,7 @@ router.post(
       amount: errand.estimatedCost,
       commissionAmount,
       runnerPayout,
+      itemsBudget: errand.itemsBudget,
       status: "pending",
       providerReference: reference,
     });
@@ -167,7 +173,7 @@ router.post(
     }
 
     const outcome = await verifyTransaction(reference);
-    const result = await settleTransaction(transaction.id, outcome, transaction.amount);
+    const result = await settleTransaction(transaction.id, outcome, transaction.amount + transaction.itemsBudget);
 
     const [updated] = await db
       .select()
@@ -196,14 +202,19 @@ router.post(
 // /wallet/verify gives pay-ins), so this webhook is the *only* place a
 // runner_payouts row leaves "pending". Matches on providerReference the
 // same way settleTransaction does for pay-ins; the status guard makes it
-// safe if Paystack retries the same event.
-async function settleRunnerPayout(reference: string, outcome: { success: boolean; failureReason?: string }) {
+// safe if Paystack retries the same event. Returns whether a matching row
+// was found — see settleVendorDisbursement below for why.
+async function settleRunnerPayout(
+  reference: string,
+  outcome: { success: boolean; failureReason?: string }
+): Promise<boolean> {
   const [payout] = await db
     .select()
     .from(runnerPayouts)
     .where(eq(runnerPayouts.providerReference, reference))
     .limit(1);
-  if (!payout || payout.status !== "pending") return;
+  if (!payout) return false;
+  if (payout.status !== "pending") return true;
 
   if (outcome.success) {
     await db
@@ -231,6 +242,54 @@ async function settleRunnerPayout(reference: string, outcome: { success: boolean
     // Left as "released" — POST /me/payout will pick these back up next
     // time the runner requests a payout, no manual intervention needed.
   }
+  return true;
+}
+
+// Vendor-disbursement leg of the same webhook — settles a single
+// vendor_disbursements row (see routes/runners.ts's POST
+// /errands/:id/vendor-disbursements) the same async way settleRunnerPayout
+// settles a payout run: Paystack's transfer.* event is the only place this
+// ever leaves "pending". On success, credits the spend against the
+// errand's escrow_transactions.itemsSpent (bounded by itemsBudget at
+// request time, never re-checked here — the request-time check is what
+// prevents overspending, not this). Returns whether a matching row was
+// found, so the webhook can also try settleRunnerPayout for the same
+// reference without querying twice for something that only ever matches
+// one of the two tables.
+async function settleVendorDisbursement(
+  reference: string,
+  outcome: { success: boolean; failureReason?: string }
+): Promise<boolean> {
+  const [disbursement] = await db
+    .select()
+    .from(vendorDisbursements)
+    .where(eq(vendorDisbursements.providerReference, reference))
+    .limit(1);
+  if (!disbursement) return false;
+  if (disbursement.status !== "pending") return true;
+
+  if (outcome.success) {
+    await db
+      .update(vendorDisbursements)
+      .set({ status: "success", completedAt: new Date() })
+      .where(and(eq(vendorDisbursements.id, disbursement.id), eq(vendorDisbursements.status, "pending")));
+    await db
+      .update(escrowTransactions)
+      .set({ itemsSpent: sql`${escrowTransactions.itemsSpent} + ${disbursement.amount}` })
+      .where(eq(escrowTransactions.errandId, disbursement.errandId));
+  } else {
+    await db
+      .update(vendorDisbursements)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        failureReason: outcome.failureReason ?? "Transfer failed",
+      })
+      .where(and(eq(vendorDisbursements.id, disbursement.id), eq(vendorDisbursements.status, "pending")));
+    // itemsSpent is untouched — the budget is still there for the runner
+    // to retry with, same reasoning as a failed runner payout above.
+  }
+  return true;
 }
 
 router.post(
@@ -259,17 +318,21 @@ router.post(
         await settleTransaction(
           transaction.id,
           { success: true, amountNaira: koboToAmount(event.data.amount ?? 0) },
-          transaction.amount
+          transaction.amount + transaction.itemsBudget
         );
       }
     } else if (
       (event.event === "transfer.success" || event.event === "transfer.failed" || event.event === "transfer.reversed") &&
       event.data?.reference
     ) {
-      await settleRunnerPayout(event.data.reference, {
-        success: event.event === "transfer.success",
-        failureReason: event.data.reason,
-      });
+      const outcome = { success: event.event === "transfer.success", failureReason: event.data.reason };
+      // A transfer reference belongs to exactly one of these two tables —
+      // try the runner-payout leg first (it's the more common of the two),
+      // fall through to vendor disbursement only if that didn't match.
+      const matchedPayout = await settleRunnerPayout(event.data.reference, outcome);
+      if (!matchedPayout) {
+        await settleVendorDisbursement(event.data.reference, outcome);
+      }
     }
 
     res.status(200).json({ received: true });

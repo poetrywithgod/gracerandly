@@ -3,17 +3,38 @@ import { randomUUID, randomInt } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
-import { errands } from "../db/schema";
+import { errands, vendorDisbursements } from "../db/schema";
 import { createErrandSchema, updateErrandSchema, parseErrandTextSchema } from "../schemas/errand";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
 import { parseErrandFromText } from "../lib/ai";
-import type { Errand } from "@gracerandly/shared-types";
+import type { Errand, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
 
 router.use(requireAuth);
+
+function toVendorDisbursement(row: typeof vendorDisbursements.$inferSelect): VendorDisbursement {
+  return {
+    id: row.id,
+    errandId: row.errandId,
+    runnerId: row.runnerId,
+    vendorName: row.vendorName,
+    method: row.method,
+    amount: row.amount,
+    status: row.status,
+    bankDetails:
+      row.bankName && row.bankAccountNumber && row.bankAccountName
+        ? { bankName: row.bankName, accountNumber: row.bankAccountNumber, accountName: row.bankAccountName }
+        : undefined,
+    receiptPhotoUrl: row.receiptPhotoUrl ?? undefined,
+    geoVerified: row.geoVerified,
+    failureReason: row.failureReason ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    completedAt: row.completedAt?.toISOString() ?? undefined,
+  };
+}
 
 function toErrand(row: typeof errands.$inferSelect): Errand {
   return {
@@ -31,6 +52,7 @@ function toErrand(row: typeof errands.$inferSelect): Errand {
     isRecurring: row.isRecurring,
     recurrenceRule: row.recurrenceRule ?? undefined,
     estimatedCost: row.estimatedCost,
+    itemsBudget: row.itemsBudget,
     finalCost: row.finalCost ?? undefined,
     sequenceOrder: row.sequenceOrder ?? undefined,
     deliveryPin: row.deliveryPin ?? undefined,
@@ -88,6 +110,7 @@ router.post(
         isRecurring: input.isRecurring,
         recurrenceRule: input.recurrenceRule,
         estimatedCost: input.estimatedCost,
+        itemsBudget: input.itemsBudget,
         aiParsed: input.aiParsed ?? false,
         deliveryPin: generateDeliveryPin(),
       })
@@ -164,6 +187,7 @@ router.patch(
         ...(input.isRecurring !== undefined && { isRecurring: input.isRecurring }),
         ...(input.recurrenceRule !== undefined && { recurrenceRule: input.recurrenceRule }),
         ...(input.estimatedCost !== undefined && { estimatedCost: input.estimatedCost }),
+        ...(input.itemsBudget !== undefined && { itemsBudget: input.itemsBudget }),
       })
       .where(eq(errands.id, existing.id))
       .returning();
@@ -190,6 +214,23 @@ router.patch(
       .returning();
 
     res.json({ errand: toErrand(row) });
+  })
+);
+
+// Read-only for the requester — a transparency view of what's actually
+// been spent at vendors on their behalf so far (see routes/runners.ts's
+// POST /errands/:id/vendor-disbursements, where these rows are created).
+router.get(
+  "/:id/vendor-disbursements",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    const rows = await db
+      .select()
+      .from(vendorDisbursements)
+      .where(eq(vendorDisbursements.errandId, existing.id))
+      .orderBy(desc(vendorDisbursements.createdAt));
+
+    res.json({ disbursements: rows.map(toVendorDisbursement) });
   })
 );
 

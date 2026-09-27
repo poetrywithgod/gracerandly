@@ -40,6 +40,13 @@ export interface Errand {
   isRecurring: boolean;
   recurrenceRule?: string;
   estimatedCost: number;
+  /** Money set aside for the runner to actually buy the items — separate
+   * from estimatedCost, which is the delivery/service fee. Zero for
+   * categories like "parcel" where there's nothing to purchase. Paid
+   * into escrow alongside estimatedCost (see EscrowTransaction) and paid
+   * out to vendors as the runner shops (see VendorDisbursement), not to
+   * the runner themselves. */
+  itemsBudget: number;
   finalCost?: number;
   sequenceOrder?: number;
   deliveryPin?: string;
