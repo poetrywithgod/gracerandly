@@ -356,14 +356,28 @@ export type NewVendorDisbursementRow = typeof vendorDisbursements.$inferInsert;
 // Mirrors packages/shared-types' ChatMessage's senderRole field.
 export const chatSenderRoleEnum = pgEnum("chat_sender_role", ["requester", "runner"]);
 
+// A regular chat bubble ("message") vs. an edit to a previously-sent one
+// ("edit" — see the targetMessageId comment below). Mirrors
+// packages/shared-types' ChatMessage.kind.
+export const chatMessageKindEnum = pgEnum("chat_message_kind", ["message", "edit"]);
+
+// Mirrors packages/shared-types' ChatMessage.contentType — "text" is a
+// normal message, "audio" is a voice note (content holds base64-encoded
+// audio, not the transcript). Same delivery/deletion lifecycle either way;
+// audio just makes for a much bigger `content` value, which is why
+// lib/chat-server.ts's WebSocketServer needs a larger maxPayload than the
+// text-only default would need.
+export const chatContentTypeEnum = pgEnum("chat_content_type", ["text", "audio"]);
+
 // Mirrors packages/shared-types' ChatMessage interface — but this table is
 // a delivery queue, not a chat history. A row exists only from the moment
 // a message is sent until the recipient's WebSocket connection
 // acknowledges receiving it (see lib/chat-server.ts), at which point it's
 // deleted. The *actual* chat history lives only on each device's own
-// local storage (apps/runner's lib/chatDb.ts) — this table's whole job is
-// getting a message from one phone to the other, same model WhatsApp's
-// servers use (store only until delivered, never a permanent archive).
+// local storage (apps/runner and apps/requester's lib/chatDb.ts) — this
+// table's whole job is getting a message from one phone to the other,
+// same model WhatsApp's servers use (store only until delivered, never a
+// permanent archive).
 //
 // senderId isn't a foreign key, since it can point at either requesters.id
 // or runners.id depending on senderRole — Drizzle doesn't support a
@@ -376,6 +390,15 @@ export const chatMessages = pgTable("chat_messages", {
     .references(() => errands.id),
   senderRole: chatSenderRoleEnum("sender_role").notNull(),
   senderId: uuid("sender_id").notNull(),
+  kind: chatMessageKindEnum("kind").notNull().default("message"),
+  contentType: chatContentTypeEnum("content_type").notNull().default("text"),
+  // For kind="edit": the id of the message being edited, as the CLIENT
+  // knows it (from its own local chat history) — not a foreign key, since
+  // the original chat_messages row is very likely already deleted by the
+  // time an edit happens (most messages are acked and removed within
+  // moments of being sent). The recipient's client looks this id up in
+  // its own local SQLite and updates that row's content in place.
+  targetMessageId: uuid("target_message_id"),
   content: text("content").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

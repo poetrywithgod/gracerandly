@@ -16,6 +16,16 @@ import type { MainStackParamList } from "../navigation/types";
 
 const theme = getTheme("light");
 
+// Mirrors apps/api's lib/chat-server.ts CHAT_ALLOWED_STATUSES — chat/calls
+// only make sense once a runner's attached to the errand, through delivery.
+const CHAT_ALLOWED_STATUSES = new Set<ErrandStatus>([
+  "accepted",
+  "en_route_to_pickup",
+  "in_progress",
+  "en_route_to_delivery",
+  "delivered",
+]);
+
 const CATEGORY_LABELS: Record<Errand["category"], string> = {
   grocery: "Grocery",
   pharmacy: "Pharmacy",
@@ -184,6 +194,14 @@ export default function ErrandDetailScreen() {
           </View>
           <Text style={styles.pinHint}>Give this to your runner when they arrive</Text>
         </View>
+      ) : null}
+
+      {CHAT_ALLOWED_STATUSES.has(errand.status) ? (
+        <Button
+          label="Message runner"
+          variant="secondary"
+          onPress={() => navigation.navigate("Chat", { errandId: errand.id })}
+        />
       ) : null}
 
       <Text style={styles.category}>{CATEGORY_LABELS[errand.category]}</Text>

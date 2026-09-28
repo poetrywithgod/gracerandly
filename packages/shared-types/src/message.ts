@@ -11,6 +11,15 @@ export interface ChatMessage {
   errandId: string;
   senderRole: "requester" | "runner";
   senderId: string;
+  /** "message" is a normal chat bubble; "edit" changes a previously-sent
+   * one — see targetMessageId. */
+  kind: "message" | "edit";
+  /** "audio" means `content` is base64-encoded audio (a voice note), not
+   * a transcript. */
+  contentType: "text" | "audio";
+  /** Only present when kind is "edit" — the id of the message being
+   * edited, as found in the recipient's own local chat history. */
+  targetMessageId?: string;
   content: string;
   createdAt: string;
 }

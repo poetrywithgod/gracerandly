@@ -1,8 +1,12 @@
 /**
- * WebSocket chat server — the WhatsApp-style delivery model discussed for
- * this feature: a message is stored just long enough to reach the other
- * device, then deleted. There is no permanent chat history on the server;
- * each app keeps its own copy locally (see apps/runner's lib/chatDb.ts).
+ * WebSocket chat + call-signaling server — the WhatsApp-style delivery
+ * model discussed for this feature: a message is stored just long enough
+ * to reach the other device, then deleted. There is no permanent chat
+ * history on the server; each app keeps its own copy locally (see
+ * apps/runner and apps/requester's lib/chatDb.ts). Calls are pure live
+ * signaling — see the call-* messages below — with no storage at all,
+ * since a call that can't be delivered live can't be "queued" the way a
+ * text message can.
  *
  * Attach with attachChatServer(httpServer) once, alongside Express — see
  * server.ts. Runs on the same port, path /ws/chat.
@@ -23,28 +27,57 @@
  * assigned, not after cancellation).
  *
  * Client -> server messages (JSON):
- *   { type: "message", content: string }
- *     Sends a new message as this connection's role. Server persists it,
- *     and replies to the SENDER with { type: "stored", id, createdAt } so
- *     they can reconcile their optimistic local copy. If the recipient is
+ *   { type: "message", content: string, contentType?: "text"|"audio", clientId?: string }
+ *     Sends a new message as this connection's role. contentType defaults
+ *     to "text"; "audio" means content is base64-encoded audio (a voice
+ *     note) rather than text. Server persists it, and replies to the
+ *     SENDER with { type: "stored", id, createdAt, clientId? } so they can
+ *     reconcile their optimistic local copy. If the recipient is
  *     currently connected to the same errand's room, the server also
  *     immediately forwards it to them as a "message" event (below).
- *     An optional clientId (any string the client makes up) is echoed
- *     back verbatim in the "stored" reply — since responses aren't
- *     strictly guaranteed to resolve in send order if a client fires off
- *     several messages back-to-back, this lets the client match a
- *     "stored" reply to the specific send that triggered it without
- *     relying on ordering.
+ *     clientId (any string the client makes up) is echoed back verbatim
+ *     in the "stored" reply — since responses aren't strictly guaranteed
+ *     to resolve in send order if a client fires off several messages
+ *     back-to-back, this lets the client match a "stored" reply to the
+ *     specific send that triggered it without relying on ordering.
  *   { type: "ack", id: string }
  *     "I received and persisted this message locally" — only valid for a
  *     message sent by the *other* party. Deletes the row server-side.
+ *   { type: "edit", targetMessageId: string, content: string, clientId?: string }
+ *     Changes the content of a message this connection previously sent.
+ *     Goes through the exact same store -> forward-if-connected ->
+ *     queue-if-not -> delete-on-ack pipeline as a regular message (so an
+ *     edit made while the recipient's offline still arrives once they
+ *     reconnect) — the only difference is the client applies it to an
+ *     existing local bubble (matched by targetMessageId) instead of
+ *     rendering a new one. There's no check that targetMessageId was
+ *     really sent by this connection (the original row is usually already
+ *     deleted by the time an edit happens, so there's nothing left
+ *     server-side to check against) — this is a convenience feature, not
+ *     a security boundary; the apps only show an "edit" option on a
+ *     user's own bubbles.
+ *   { type: "call-invite", mode: "audio"|"video" }
+ *     Requests a call. Relayed live to the recipient ONLY if they're
+ *     currently connected — there is no queuing for calls, so if they're
+ *     not connected the server immediately replies to the caller with
+ *     { type: "call-unavailable" } instead of silently doing nothing.
+ *   { type: "call-accept" } / { type: "call-decline" } / { type: "call-end" }
+ *     Relayed live to the other party. No-ops (silently) if they've
+ *     disconnected in the meantime — the caller's own client already
+ *     handles a dropped connection as a hangup.
  *
  * Server -> client messages (JSON):
- *   { type: "message", id, errandId, senderRole, senderId, content, createdAt }
- *     A message from the other party — sent live on arrival, or flushed
- *     from the queue on connect if it arrived while this device was away.
+ *   { type: "message", id, errandId, senderRole, senderId, kind, contentType, targetMessageId?, content, createdAt }
+ *     A message (or edit, when kind is "edit") from the other party — sent
+ *     live on arrival, or flushed from the queue on connect if it arrived
+ *     while this device was away.
  *   { type: "stored", id, createdAt, clientId? }
- *     Acknowledges a message this connection just sent.
+ *     Acknowledges a message/edit this connection just sent.
+ *   { type: "call-invite", mode, fromRole } / "call-accept" / "call-decline" / "call-end"
+ *     Forwarded from the other party — see the client-message docs above.
+ *   { type: "call-unavailable" }
+ *     Sent back to a caller whose call-invite couldn't be delivered
+ *     because the other party isn't connected right now.
  *   { type: "error", message }
  *     Something about the last client message was invalid; connection
  *     stays open.
@@ -60,9 +93,31 @@ import { verifyAuthToken } from "./jwt";
 
 const CHAT_ALLOWED_STATUSES = new Set(["accepted", "en_route_to_pickup", "in_progress", "en_route_to_delivery", "delivered"]);
 
+// A voice note's base64 payload is much bigger than any text message —
+// roughly 1.3x the raw audio size. This caps a single message/edit
+// around ~2.2MB of base64, comfortably more than a short voice note
+// needs (compressed audio at a low bitrate for well under a minute), and
+// well inside the WebSocketServer's maxPayload below.
+const MAX_CONTENT_LENGTH = 3_000_000;
+
 const clientMessageSchema = z.union([
-  z.object({ type: z.literal("message"), content: z.string().trim().min(1).max(2000), clientId: z.string().optional() }),
+  z.object({
+    type: z.literal("message"),
+    content: z.string().trim().min(1).max(MAX_CONTENT_LENGTH),
+    contentType: z.enum(["text", "audio"]).optional(),
+    clientId: z.string().optional(),
+  }),
   z.object({ type: z.literal("ack"), id: z.string().uuid() }),
+  z.object({
+    type: z.literal("edit"),
+    targetMessageId: z.string().uuid(),
+    content: z.string().trim().min(1).max(MAX_CONTENT_LENGTH),
+    clientId: z.string().optional(),
+  }),
+  z.object({ type: z.literal("call-invite"), mode: z.enum(["audio", "video"]) }),
+  z.object({ type: z.literal("call-accept") }),
+  z.object({ type: z.literal("call-decline") }),
+  z.object({ type: z.literal("call-end") }),
 ]);
 
 interface Connection {
@@ -102,13 +157,32 @@ function otherRole(role: "requester" | "runner"): "requester" | "runner" {
   return role === "requester" ? "runner" : "requester";
 }
 
+function recipientOf(conn: Connection): Connection | undefined {
+  return rooms.get(conn.errandId)?.[otherRole(conn.role)];
+}
+
 function send(ws: WebSocket, payload: unknown) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
 }
 
-/** Sends every message still queued for `conn` (i.e. sent by the other
- * party while this device wasn't connected) — called right after a
- * successful join, mirroring what happens when WhatsApp reconnects. */
+function messagePayload(row: typeof chatMessages.$inferSelect) {
+  return {
+    type: "message" as const,
+    id: row.id,
+    errandId: row.errandId,
+    senderRole: row.senderRole,
+    senderId: row.senderId,
+    kind: row.kind,
+    contentType: row.contentType,
+    targetMessageId: row.targetMessageId ?? undefined,
+    content: row.content,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/** Sends every message (and edit) still queued for `conn` — i.e. sent by
+ * the other party while this device wasn't connected — called right after
+ * a successful join, mirroring what happens when WhatsApp reconnects. */
 async function flushQueuedMessages(conn: Connection) {
   const rows = await db
     .select()
@@ -116,17 +190,7 @@ async function flushQueuedMessages(conn: Connection) {
     .where(and(eq(chatMessages.errandId, conn.errandId), ne(chatMessages.senderRole, conn.role)))
     .orderBy(chatMessages.createdAt);
 
-  for (const row of rows) {
-    send(conn.ws, {
-      type: "message",
-      id: row.id,
-      errandId: row.errandId,
-      senderRole: row.senderRole,
-      senderId: row.senderId,
-      content: row.content,
-      createdAt: row.createdAt.toISOString(),
-    });
-  }
+  for (const row of rows) send(conn.ws, messagePayload(row));
 }
 
 async function handleClientMessage(conn: Connection, raw: unknown) {
@@ -153,32 +217,35 @@ async function handleClientMessage(conn: Connection, raw: unknown) {
     return;
   }
 
-  // data.type === "message"
+  if (data.type === "call-invite" || data.type === "call-accept" || data.type === "call-decline" || data.type === "call-end") {
+    const recipient = recipientOf(conn);
+    if (!recipient) {
+      if (data.type === "call-invite") send(conn.ws, { type: "call-unavailable" });
+      return;
+    }
+    send(recipient.ws, data.type === "call-invite" ? { ...data, fromRole: conn.role } : data);
+    return;
+  }
+
+  // data.type is "message" or "edit" — both go through the same
+  // store -> forward-if-connected -> queue-if-not pipeline.
   const [row] = await db
     .insert(chatMessages)
     .values({
       errandId: conn.errandId,
       senderRole: conn.role,
       senderId: conn.userId,
+      kind: data.type === "edit" ? "edit" : "message",
+      contentType: data.type === "message" ? (data.contentType ?? "text") : "text",
+      targetMessageId: data.type === "edit" ? data.targetMessageId : undefined,
       content: data.content,
     })
     .returning();
 
   send(conn.ws, { type: "stored", id: row.id, createdAt: row.createdAt.toISOString(), clientId: data.clientId });
 
-  const room = rooms.get(conn.errandId);
-  const recipient = room?.[otherRole(conn.role)];
-  if (recipient) {
-    send(recipient.ws, {
-      type: "message",
-      id: row.id,
-      errandId: row.errandId,
-      senderRole: row.senderRole,
-      senderId: row.senderId,
-      content: row.content,
-      createdAt: row.createdAt.toISOString(),
-    });
-  }
+  const recipient = recipientOf(conn);
+  if (recipient) send(recipient.ws, messagePayload(row));
   // If the recipient isn't connected right now, the row just stays in
   // chat_messages — flushQueuedMessages delivers it next time they join.
 }
@@ -212,7 +279,7 @@ async function authenticateConnection(req: IncomingMessage): Promise<Connection 
 }
 
 export function attachChatServer(server: HttpServer): void {
-  const wss = new WebSocketServer({ server, path: "/ws/chat" });
+  const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 5 * 1024 * 1024 });
 
   wss.on("connection", async (ws, req) => {
     const result = await authenticateConnection(req);
@@ -238,7 +305,13 @@ export function attachChatServer(server: HttpServer): void {
       });
     });
 
-    ws.on("close", () => leaveRoom(conn));
+    ws.on("close", () => {
+      leaveRoom(conn);
+      // A dropped connection mid-call should look like a hangup to the
+      // other party — they have no other way to find out.
+      const recipient = recipientOf(conn);
+      if (recipient) send(recipient.ws, { type: "call-end" });
+    });
 
     // Basic liveness check — a mobile connection can go dark (backgrounded
     // app, lost signal) without ever sending a close frame. Ping every 30s

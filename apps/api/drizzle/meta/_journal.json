@@ -78,6 +78,13 @@
       "when": 1790516733427,
       "tag": "0010_boring_puck",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790555304766,
+      "tag": "0011_pretty_the_fury",
+      "breakpoints": true
     }
   ]
 }

@@ -2,6 +2,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import TabNavigator from "./TabNavigator";
 import CreateErrandScreen from "../screens/CreateErrandScreen";
 import ErrandDetailScreen from "../screens/ErrandDetailScreen";
+import ChatScreen from "../screens/ChatScreen";
 import type { MainStackParamList } from "./types";
 
 // ErrandTracking (live runner tracking) lands in later work. Tabs
@@ -24,6 +25,7 @@ export default function MainNavigator() {
         component={ErrandDetailScreen}
         options={{ headerShown: true, title: "Errand" }}
       />
+      <Stack.Screen name="Chat" component={ChatScreen} options={{ headerShown: true, title: "Chat" }} />
     </Stack.Navigator>
   );
 }

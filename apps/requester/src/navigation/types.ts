@@ -14,6 +14,7 @@ export type MainStackParamList = {
   CreateErrand: { errandId?: string } | undefined;
   ErrandDetail: { errandId: string };
   ErrandTracking: { errandId: string };
+  Chat: { errandId: string };
 };
 
 export type RootStackParamList = {

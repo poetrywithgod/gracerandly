@@ -3,12 +3,13 @@ import { randomUUID, randomInt } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
-import { errands, vendorDisbursements } from "../db/schema";
+import { errands, vendorDisbursements, runners } from "../db/schema";
 import { createErrandSchema, updateErrandSchema, parseErrandTextSchema } from "../schemas/errand";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
 import { parseErrandFromText } from "../lib/ai";
+import { getAgoraJoinInfo } from "../lib/agora";
 import type { Errand, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -231,6 +232,48 @@ router.get(
       .orderBy(desc(vendorDisbursements.createdAt));
 
     res.json({ disbursements: rows.map(toVendorDisbursement) });
+  })
+);
+
+// Same "active chat window" as lib/chat-server.ts's CHAT_ALLOWED_STATUSES —
+// duplicated rather than imported since it's a tiny, stable set and this
+// keeps the route files independent of each other's internals (same
+// reasoning as toErrand() being duplicated across routes/errands.ts and
+// routes/runners.ts already).
+const CHAT_ALLOWED_STATUSES = new Set(["accepted", "en_route_to_pickup", "in_progress", "en_route_to_delivery", "delivered"]);
+
+// Who the requester is chatting/calling with on this errand — just enough
+// (name + avatar) for the chat header and incoming-call banner. Runner's
+// own equivalent is GET /runners/errands/:id/chat-participant.
+router.get(
+  "/:id/chat-participant",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    if (!existing.runnerId) throw AppErrors.notFound("No runner assigned to this errand yet");
+
+    const [runner] = await db.select().from(runners).where(eq(runners.id, existing.runnerId)).limit(1);
+    if (!runner) throw AppErrors.notFound("Runner not found");
+
+    res.json({ participant: { id: runner.id, name: runner.fullName, avatarUrl: runner.avatarUrl ?? undefined } });
+  })
+);
+
+// Mints a short-lived Agora token so this requester can join the call
+// channel for this errand — see lib/agora.ts for what the token actually
+// authorizes, and lib/chat-server.ts's call-invite/accept messages for how
+// the two parties actually find out a call is happening in the first
+// place (this endpoint only hands out the credential to join, once they
+// already know to).
+router.post(
+  "/:id/agora-token",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    if (!existing.runnerId || !CHAT_ALLOWED_STATUSES.has(existing.status)) {
+      throw AppErrors.conflict("Calling isn't available for this errand right now");
+    }
+
+    const info = getAgoraJoinInfo(existing.id, req.requesterId!);
+    res.json(info);
   })
 );
 

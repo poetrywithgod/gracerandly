@@ -26,7 +26,7 @@ import type { MainStackParamList } from "../navigation/types";
 
 const theme = getTheme("light");
 
-const ROLE = "runner" as const;
+const ROLE = "requester" as const;
 const MAX_VOICE_NOTE_SECONDS = 60;
 
 type Props = NativeStackScreenProps<MainStackParamList, "Chat">;
@@ -58,7 +58,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       });
   }, [errandId, token]);
 
-  const otherName = participant?.name ?? "Requester";
+  const otherName = participant?.name ?? "Runner";
 
   useLayoutEffect(() => {
     navigation.setOptions({

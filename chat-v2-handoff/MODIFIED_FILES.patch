@@ -1,0 +1,1903 @@
+diff --git a/apps/api/.env.example b/apps/api/.env.example
+index c6ac0e5..52d1ea6 100644
+--- a/apps/api/.env.example
++++ b/apps/api/.env.example
+@@ -52,3 +52,12 @@ EXPOSE_DEV_VERIFICATION_CODES=false
+ # makes that one endpoint return an error rather than fake a parse. Manual
+ # entry (the rest of the create-errand form) works regardless.
+ ANTHROPIC_API_KEY=
++
++# Get an App ID + App Certificate from https://console.agora.io (free tier:
++# 10,000 minutes/month). Powers audio/video calling (lib/agora.ts) — minting
++# a short-lived join token per call. With these unset, the call-token
++# endpoints fail loudly (same stance as Paystack/Anthropic above); chat
++# text/voice-note messaging works fine without them, since calling is the
++# only feature that touches Agora.
++AGORA_APP_ID=
++AGORA_APP_CERTIFICATE=
+diff --git a/apps/api/drizzle/meta/_journal.json b/apps/api/drizzle/meta/_journal.json
+index 6d55f35..f33c6dd 100644
+--- a/apps/api/drizzle/meta/_journal.json
++++ b/apps/api/drizzle/meta/_journal.json
+@@ -78,6 +78,13 @@
+       "when": 1790516733427,
+       "tag": "0010_boring_puck",
+       "breakpoints": true
++    },
++    {
++      "idx": 11,
++      "version": "7",
++      "when": 1790555304766,
++      "tag": "0011_pretty_the_fury",
++      "breakpoints": true
+     }
+   ]
+ }
+\ No newline at end of file
+diff --git a/apps/api/package.json b/apps/api/package.json
+index a11d649..23e1f03 100644
+--- a/apps/api/package.json
++++ b/apps/api/package.json
+@@ -28,6 +28,7 @@
+     "jsonwebtoken": "^9.0.3",
+     "postgres": "^3.4.9",
+     "ws": "^8.19.0",
++    "agora-token": "^2.0.6",
+     "zod": "^4.6.5"
+   },
+   "devDependencies": {
+diff --git a/apps/api/src/db/schema.ts b/apps/api/src/db/schema.ts
+index f7fecf2..143020f 100644
+--- a/apps/api/src/db/schema.ts
++++ b/apps/api/src/db/schema.ts
+@@ -356,14 +356,28 @@ export type NewVendorDisbursementRow = typeof vendorDisbursements.$inferInsert;
+ // Mirrors packages/shared-types' ChatMessage's senderRole field.
+ export const chatSenderRoleEnum = pgEnum("chat_sender_role", ["requester", "runner"]);
+ 
++// A regular chat bubble ("message") vs. an edit to a previously-sent one
++// ("edit" — see the targetMessageId comment below). Mirrors
++// packages/shared-types' ChatMessage.kind.
++export const chatMessageKindEnum = pgEnum("chat_message_kind", ["message", "edit"]);
++
++// Mirrors packages/shared-types' ChatMessage.contentType — "text" is a
++// normal message, "audio" is a voice note (content holds base64-encoded
++// audio, not the transcript). Same delivery/deletion lifecycle either way;
++// audio just makes for a much bigger `content` value, which is why
++// lib/chat-server.ts's WebSocketServer needs a larger maxPayload than the
++// text-only default would need.
++export const chatContentTypeEnum = pgEnum("chat_content_type", ["text", "audio"]);
++
+ // Mirrors packages/shared-types' ChatMessage interface — but this table is
+ // a delivery queue, not a chat history. A row exists only from the moment
+ // a message is sent until the recipient's WebSocket connection
+ // acknowledges receiving it (see lib/chat-server.ts), at which point it's
+ // deleted. The *actual* chat history lives only on each device's own
+-// local storage (apps/runner's lib/chatDb.ts) — this table's whole job is
+-// getting a message from one phone to the other, same model WhatsApp's
+-// servers use (store only until delivered, never a permanent archive).
++// local storage (apps/runner and apps/requester's lib/chatDb.ts) — this
++// table's whole job is getting a message from one phone to the other,
++// same model WhatsApp's servers use (store only until delivered, never a
++// permanent archive).
+ //
+ // senderId isn't a foreign key, since it can point at either requesters.id
+ // or runners.id depending on senderRole — Drizzle doesn't support a
+@@ -376,6 +390,15 @@ export const chatMessages = pgTable("chat_messages", {
+     .references(() => errands.id),
+   senderRole: chatSenderRoleEnum("sender_role").notNull(),
+   senderId: uuid("sender_id").notNull(),
++  kind: chatMessageKindEnum("kind").notNull().default("message"),
++  contentType: chatContentTypeEnum("content_type").notNull().default("text"),
++  // For kind="edit": the id of the message being edited, as the CLIENT
++  // knows it (from its own local chat history) — not a foreign key, since
++  // the original chat_messages row is very likely already deleted by the
++  // time an edit happens (most messages are acked and removed within
++  // moments of being sent). The recipient's client looks this id up in
++  // its own local SQLite and updates that row's content in place.
++  targetMessageId: uuid("target_message_id"),
+   content: text("content").notNull(),
+   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+ });
+diff --git a/apps/api/src/lib/chat-server.ts b/apps/api/src/lib/chat-server.ts
+index 8c677f5..d9cdb74 100644
+--- a/apps/api/src/lib/chat-server.ts
++++ b/apps/api/src/lib/chat-server.ts
+@@ -1,8 +1,12 @@
+ /**
+- * WebSocket chat server — the WhatsApp-style delivery model discussed for
+- * this feature: a message is stored just long enough to reach the other
+- * device, then deleted. There is no permanent chat history on the server;
+- * each app keeps its own copy locally (see apps/runner's lib/chatDb.ts).
++ * WebSocket chat + call-signaling server — the WhatsApp-style delivery
++ * model discussed for this feature: a message is stored just long enough
++ * to reach the other device, then deleted. There is no permanent chat
++ * history on the server; each app keeps its own copy locally (see
++ * apps/runner and apps/requester's lib/chatDb.ts). Calls are pure live
++ * signaling — see the call-* messages below — with no storage at all,
++ * since a call that can't be delivered live can't be "queued" the way a
++ * text message can.
+  *
+  * Attach with attachChatServer(httpServer) once, alongside Express — see
+  * server.ts. Runs on the same port, path /ws/chat.
+@@ -23,28 +27,57 @@
+  * assigned, not after cancellation).
+  *
+  * Client -> server messages (JSON):
+- *   { type: "message", content: string }
+- *     Sends a new message as this connection's role. Server persists it,
+- *     and replies to the SENDER with { type: "stored", id, createdAt } so
+- *     they can reconcile their optimistic local copy. If the recipient is
++ *   { type: "message", content: string, contentType?: "text"|"audio", clientId?: string }
++ *     Sends a new message as this connection's role. contentType defaults
++ *     to "text"; "audio" means content is base64-encoded audio (a voice
++ *     note) rather than text. Server persists it, and replies to the
++ *     SENDER with { type: "stored", id, createdAt, clientId? } so they can
++ *     reconcile their optimistic local copy. If the recipient is
+  *     currently connected to the same errand's room, the server also
+  *     immediately forwards it to them as a "message" event (below).
+- *     An optional clientId (any string the client makes up) is echoed
+- *     back verbatim in the "stored" reply — since responses aren't
+- *     strictly guaranteed to resolve in send order if a client fires off
+- *     several messages back-to-back, this lets the client match a
+- *     "stored" reply to the specific send that triggered it without
+- *     relying on ordering.
++ *     clientId (any string the client makes up) is echoed back verbatim
++ *     in the "stored" reply — since responses aren't strictly guaranteed
++ *     to resolve in send order if a client fires off several messages
++ *     back-to-back, this lets the client match a "stored" reply to the
++ *     specific send that triggered it without relying on ordering.
+  *   { type: "ack", id: string }
+  *     "I received and persisted this message locally" — only valid for a
+  *     message sent by the *other* party. Deletes the row server-side.
++ *   { type: "edit", targetMessageId: string, content: string, clientId?: string }
++ *     Changes the content of a message this connection previously sent.
++ *     Goes through the exact same store -> forward-if-connected ->
++ *     queue-if-not -> delete-on-ack pipeline as a regular message (so an
++ *     edit made while the recipient's offline still arrives once they
++ *     reconnect) — the only difference is the client applies it to an
++ *     existing local bubble (matched by targetMessageId) instead of
++ *     rendering a new one. There's no check that targetMessageId was
++ *     really sent by this connection (the original row is usually already
++ *     deleted by the time an edit happens, so there's nothing left
++ *     server-side to check against) — this is a convenience feature, not
++ *     a security boundary; the apps only show an "edit" option on a
++ *     user's own bubbles.
++ *   { type: "call-invite", mode: "audio"|"video" }
++ *     Requests a call. Relayed live to the recipient ONLY if they're
++ *     currently connected — there is no queuing for calls, so if they're
++ *     not connected the server immediately replies to the caller with
++ *     { type: "call-unavailable" } instead of silently doing nothing.
++ *   { type: "call-accept" } / { type: "call-decline" } / { type: "call-end" }
++ *     Relayed live to the other party. No-ops (silently) if they've
++ *     disconnected in the meantime — the caller's own client already
++ *     handles a dropped connection as a hangup.
+  *
+  * Server -> client messages (JSON):
+- *   { type: "message", id, errandId, senderRole, senderId, content, createdAt }
+- *     A message from the other party — sent live on arrival, or flushed
+- *     from the queue on connect if it arrived while this device was away.
++ *   { type: "message", id, errandId, senderRole, senderId, kind, contentType, targetMessageId?, content, createdAt }
++ *     A message (or edit, when kind is "edit") from the other party — sent
++ *     live on arrival, or flushed from the queue on connect if it arrived
++ *     while this device was away.
+  *   { type: "stored", id, createdAt, clientId? }
+- *     Acknowledges a message this connection just sent.
++ *     Acknowledges a message/edit this connection just sent.
++ *   { type: "call-invite", mode, fromRole } / "call-accept" / "call-decline" / "call-end"
++ *     Forwarded from the other party — see the client-message docs above.
++ *   { type: "call-unavailable" }
++ *     Sent back to a caller whose call-invite couldn't be delivered
++ *     because the other party isn't connected right now.
+  *   { type: "error", message }
+  *     Something about the last client message was invalid; connection
+  *     stays open.
+@@ -60,9 +93,31 @@ import { verifyAuthToken } from "./jwt";
+ 
+ const CHAT_ALLOWED_STATUSES = new Set(["accepted", "en_route_to_pickup", "in_progress", "en_route_to_delivery", "delivered"]);
+ 
++// A voice note's base64 payload is much bigger than any text message —
++// roughly 1.3x the raw audio size. This caps a single message/edit
++// around ~2.2MB of base64, comfortably more than a short voice note
++// needs (compressed audio at a low bitrate for well under a minute), and
++// well inside the WebSocketServer's maxPayload below.
++const MAX_CONTENT_LENGTH = 3_000_000;
++
+ const clientMessageSchema = z.union([
+-  z.object({ type: z.literal("message"), content: z.string().trim().min(1).max(2000), clientId: z.string().optional() }),
++  z.object({
++    type: z.literal("message"),
++    content: z.string().trim().min(1).max(MAX_CONTENT_LENGTH),
++    contentType: z.enum(["text", "audio"]).optional(),
++    clientId: z.string().optional(),
++  }),
+   z.object({ type: z.literal("ack"), id: z.string().uuid() }),
++  z.object({
++    type: z.literal("edit"),
++    targetMessageId: z.string().uuid(),
++    content: z.string().trim().min(1).max(MAX_CONTENT_LENGTH),
++    clientId: z.string().optional(),
++  }),
++  z.object({ type: z.literal("call-invite"), mode: z.enum(["audio", "video"]) }),
++  z.object({ type: z.literal("call-accept") }),
++  z.object({ type: z.literal("call-decline") }),
++  z.object({ type: z.literal("call-end") }),
+ ]);
+ 
+ interface Connection {
+@@ -102,13 +157,32 @@ function otherRole(role: "requester" | "runner"): "requester" | "runner" {
+   return role === "requester" ? "runner" : "requester";
+ }
+ 
++function recipientOf(conn: Connection): Connection | undefined {
++  return rooms.get(conn.errandId)?.[otherRole(conn.role)];
++}
++
+ function send(ws: WebSocket, payload: unknown) {
+   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+ }
+ 
+-/** Sends every message still queued for `conn` (i.e. sent by the other
+- * party while this device wasn't connected) — called right after a
+- * successful join, mirroring what happens when WhatsApp reconnects. */
++function messagePayload(row: typeof chatMessages.$inferSelect) {
++  return {
++    type: "message" as const,
++    id: row.id,
++    errandId: row.errandId,
++    senderRole: row.senderRole,
++    senderId: row.senderId,
++    kind: row.kind,
++    contentType: row.contentType,
++    targetMessageId: row.targetMessageId ?? undefined,
++    content: row.content,
++    createdAt: row.createdAt.toISOString(),
++  };
++}
++
++/** Sends every message (and edit) still queued for `conn` — i.e. sent by
++ * the other party while this device wasn't connected — called right after
++ * a successful join, mirroring what happens when WhatsApp reconnects. */
+ async function flushQueuedMessages(conn: Connection) {
+   const rows = await db
+     .select()
+@@ -116,17 +190,7 @@ async function flushQueuedMessages(conn: Connection) {
+     .where(and(eq(chatMessages.errandId, conn.errandId), ne(chatMessages.senderRole, conn.role)))
+     .orderBy(chatMessages.createdAt);
+ 
+-  for (const row of rows) {
+-    send(conn.ws, {
+-      type: "message",
+-      id: row.id,
+-      errandId: row.errandId,
+-      senderRole: row.senderRole,
+-      senderId: row.senderId,
+-      content: row.content,
+-      createdAt: row.createdAt.toISOString(),
+-    });
+-  }
++  for (const row of rows) send(conn.ws, messagePayload(row));
+ }
+ 
+ async function handleClientMessage(conn: Connection, raw: unknown) {
+@@ -153,32 +217,35 @@ async function handleClientMessage(conn: Connection, raw: unknown) {
+     return;
+   }
+ 
+-  // data.type === "message"
++  if (data.type === "call-invite" || data.type === "call-accept" || data.type === "call-decline" || data.type === "call-end") {
++    const recipient = recipientOf(conn);
++    if (!recipient) {
++      if (data.type === "call-invite") send(conn.ws, { type: "call-unavailable" });
++      return;
++    }
++    send(recipient.ws, data.type === "call-invite" ? { ...data, fromRole: conn.role } : data);
++    return;
++  }
++
++  // data.type is "message" or "edit" — both go through the same
++  // store -> forward-if-connected -> queue-if-not pipeline.
+   const [row] = await db
+     .insert(chatMessages)
+     .values({
+       errandId: conn.errandId,
+       senderRole: conn.role,
+       senderId: conn.userId,
++      kind: data.type === "edit" ? "edit" : "message",
++      contentType: data.type === "message" ? (data.contentType ?? "text") : "text",
++      targetMessageId: data.type === "edit" ? data.targetMessageId : undefined,
+       content: data.content,
+     })
+     .returning();
+ 
+   send(conn.ws, { type: "stored", id: row.id, createdAt: row.createdAt.toISOString(), clientId: data.clientId });
+ 
+-  const room = rooms.get(conn.errandId);
+-  const recipient = room?.[otherRole(conn.role)];
+-  if (recipient) {
+-    send(recipient.ws, {
+-      type: "message",
+-      id: row.id,
+-      errandId: row.errandId,
+-      senderRole: row.senderRole,
+-      senderId: row.senderId,
+-      content: row.content,
+-      createdAt: row.createdAt.toISOString(),
+-    });
+-  }
++  const recipient = recipientOf(conn);
++  if (recipient) send(recipient.ws, messagePayload(row));
+   // If the recipient isn't connected right now, the row just stays in
+   // chat_messages — flushQueuedMessages delivers it next time they join.
+ }
+@@ -212,7 +279,7 @@ async function authenticateConnection(req: IncomingMessage): Promise<Connection
+ }
+ 
+ export function attachChatServer(server: HttpServer): void {
+-  const wss = new WebSocketServer({ server, path: "/ws/chat" });
++  const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 5 * 1024 * 1024 });
+ 
+   wss.on("connection", async (ws, req) => {
+     const result = await authenticateConnection(req);
+@@ -238,7 +305,13 @@ export function attachChatServer(server: HttpServer): void {
+       });
+     });
+ 
+-    ws.on("close", () => leaveRoom(conn));
++    ws.on("close", () => {
++      leaveRoom(conn);
++      // A dropped connection mid-call should look like a hangup to the
++      // other party — they have no other way to find out.
++      const recipient = recipientOf(conn);
++      if (recipient) send(recipient.ws, { type: "call-end" });
++    });
+ 
+     // Basic liveness check — a mobile connection can go dark (backgrounded
+     // app, lost signal) without ever sending a close frame. Ping every 30s
+diff --git a/apps/api/src/routes/errands.ts b/apps/api/src/routes/errands.ts
+index 3f598d3..09944e4 100644
+--- a/apps/api/src/routes/errands.ts
++++ b/apps/api/src/routes/errands.ts
+@@ -3,12 +3,13 @@ import { randomUUID, randomInt } from "node:crypto";
+ import { and, desc, eq } from "drizzle-orm";
+ import { z } from "zod";
+ import { db } from "../db/client";
+-import { errands, vendorDisbursements } from "../db/schema";
++import { errands, vendorDisbursements, runners } from "../db/schema";
+ import { createErrandSchema, updateErrandSchema, parseErrandTextSchema } from "../schemas/errand";
+ import { AppErrors } from "../lib/errors";
+ import { asyncHandler } from "../lib/asyncHandler";
+ import { requireAuth } from "../middleware/requireAuth";
+ import { parseErrandFromText } from "../lib/ai";
++import { getAgoraJoinInfo } from "../lib/agora";
+ import type { Errand, VendorDisbursement } from "@gracerandly/shared-types";
+ 
+ const router: Router = Router();
+@@ -234,4 +235,46 @@ router.get(
+   })
+ );
+ 
++// Same "active chat window" as lib/chat-server.ts's CHAT_ALLOWED_STATUSES —
++// duplicated rather than imported since it's a tiny, stable set and this
++// keeps the route files independent of each other's internals (same
++// reasoning as toErrand() being duplicated across routes/errands.ts and
++// routes/runners.ts already).
++const CHAT_ALLOWED_STATUSES = new Set(["accepted", "en_route_to_pickup", "in_progress", "en_route_to_delivery", "delivered"]);
++
++// Who the requester is chatting/calling with on this errand — just enough
++// (name + avatar) for the chat header and incoming-call banner. Runner's
++// own equivalent is GET /runners/errands/:id/chat-participant.
++router.get(
++  "/:id/chat-participant",
++  asyncHandler(async (req, res) => {
++    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
++    if (!existing.runnerId) throw AppErrors.notFound("No runner assigned to this errand yet");
++
++    const [runner] = await db.select().from(runners).where(eq(runners.id, existing.runnerId)).limit(1);
++    if (!runner) throw AppErrors.notFound("Runner not found");
++
++    res.json({ participant: { id: runner.id, name: runner.fullName, avatarUrl: runner.avatarUrl ?? undefined } });
++  })
++);
++
++// Mints a short-lived Agora token so this requester can join the call
++// channel for this errand — see lib/agora.ts for what the token actually
++// authorizes, and lib/chat-server.ts's call-invite/accept messages for how
++// the two parties actually find out a call is happening in the first
++// place (this endpoint only hands out the credential to join, once they
++// already know to).
++router.post(
++  "/:id/agora-token",
++  asyncHandler(async (req, res) => {
++    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
++    if (!existing.runnerId || !CHAT_ALLOWED_STATUSES.has(existing.status)) {
++      throw AppErrors.conflict("Calling isn't available for this errand right now");
++    }
++
++    const info = getAgoraJoinInfo(existing.id, req.requesterId!);
++    res.json(info);
++  })
++);
++
+ export default router;
+diff --git a/apps/api/src/routes/runners.ts b/apps/api/src/routes/runners.ts
+index ad2b1a6..af2332b 100644
+--- a/apps/api/src/routes/runners.ts
++++ b/apps/api/src/routes/runners.ts
+@@ -4,7 +4,7 @@ import { and, desc, eq, inArray, or } from "drizzle-orm";
+ import bcrypt from "bcryptjs";
+ import { z } from "zod";
+ import { db } from "../db/client";
+-import { runners, errands, escrowTransactions, runnerPayouts, vendorDisbursements } from "../db/schema";
++import { runners, errands, escrowTransactions, runnerPayouts, vendorDisbursements, requesters } from "../db/schema";
+ import {
+   runnerSignupSchema,
+   runnerLoginSchema,
+@@ -29,6 +29,7 @@ import {
+   milesToMeters,
+ } from "../lib/matching";
+ import { resolveBankCode, resolveAccountNumber, createTransferRecipient, initiateTransfer } from "../lib/payments";
++import { getAgoraJoinInfo } from "../lib/agora";
+ import type { Errand, ErrandStatus, Runner, RunnerPayout, VendorDisbursement } from "@gracerandly/shared-types";
+ 
+ const router: Router = Router();
+@@ -875,4 +876,41 @@ router.get(
+   })
+ );
+ 
++// Same "active chat window" as lib/chat-server.ts's CHAT_ALLOWED_STATUSES —
++// duplicated rather than imported, same reasoning as toErrand() being
++// duplicated across route files already.
++const CHAT_ALLOWED_STATUSES = new Set(["accepted", "en_route_to_pickup", "in_progress", "en_route_to_delivery", "delivered"]);
++
++// Who the runner is chatting/calling with on this errand — requester's
++// equivalent is GET /errands/:id/chat-participant.
++router.get(
++  "/errands/:id/chat-participant",
++  requireRunnerAuth,
++  asyncHandler(async (req, res) => {
++    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
++
++    const [requester] = await db.select().from(requesters).where(eq(requesters.id, existing.requesterId)).limit(1);
++    if (!requester) throw AppErrors.notFound("Requester not found");
++
++    res.json({ participant: { id: requester.id, name: requester.fullName, avatarUrl: requester.avatarUrl ?? undefined } });
++  })
++);
++
++// Mints a short-lived Agora token so this runner can join the call channel
++// for this errand — see lib/agora.ts and lib/chat-server.ts's call-invite
++// signaling for the rest of how calling works.
++router.post(
++  "/errands/:id/agora-token",
++  requireRunnerAuth,
++  asyncHandler(async (req, res) => {
++    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
++    if (!CHAT_ALLOWED_STATUSES.has(existing.status)) {
++      throw AppErrors.conflict("Calling isn't available for this errand right now");
++    }
++
++    const info = getAgoraJoinInfo(existing.id, req.runnerId!);
++    res.json(info);
++  })
++);
++
+ export default router;
+diff --git a/apps/requester/app.json b/apps/requester/app.json
+index 21232ae..6d23b4e 100644
+--- a/apps/requester/app.json
++++ b/apps/requester/app.json
+@@ -8,7 +8,11 @@
+     "icon": "./assets/icon.png",
+     "userInterfaceStyle": "light",
+     "ios": {
+-      "supportsTablet": true
++      "supportsTablet": true,
++      "infoPlist": {
++        "NSCameraUsageDescription": "Gracerandly uses your camera for video calls with your requester/runner.",
++        "NSMicrophoneUsageDescription": "Gracerandly uses your microphone for voice notes and calls."
++      }
+     },
+     "android": {
+       "adaptiveIcon": {
+@@ -17,7 +21,12 @@
+         "backgroundImage": "./assets/android-icon-background.png",
+         "monochromeImage": "./assets/android-icon-monochrome.png"
+       },
+-      "predictiveBackGestureEnabled": false
++      "predictiveBackGestureEnabled": false,
++      "permissions": [
++        "RECORD_AUDIO",
++        "CAMERA",
++        "MODIFY_AUDIO_SETTINGS"
++      ]
+     },
+     "web": {
+       "favicon": "./assets/favicon.png"
+@@ -37,6 +46,12 @@
+           "photosPermission": "Gracerandly uses your photos to set your profile picture.",
+           "cameraPermission": "Gracerandly uses your camera to take a profile picture."
+         }
++      ],
++      [
++        "expo-audio",
++        {
++          "microphonePermission": "Gracerandly uses your microphone for voice notes and calls."
++        }
+       ]
+     ]
+   }
+diff --git a/apps/requester/package.json b/apps/requester/package.json
+index e6b87f1..22aff36 100644
+--- a/apps/requester/package.json
++++ b/apps/requester/package.json
+@@ -12,10 +12,13 @@
+     "@react-navigation/bottom-tabs": "^7.19.2",
+     "@react-navigation/native": "^7.4.1",
+     "@react-navigation/native-stack": "^7.19.2",
++    "@supabase/supabase-js": "^2.48.1",
+     "country-telephone-data": "^0.6.3",
+     "expo": "~57.0.24",
++    "expo-audio": "~57.0.5",
+     "expo-blur": "~57.0.3",
+     "expo-constants": "~57.0.19",
++    "expo-file-system": "~57.0.7",
+     "expo-font": "~57.0.4",
+     "expo-image-manipulator": "~57.0.19",
+     "expo-image-picker": "~57.0.19",
+@@ -24,16 +27,17 @@
+     "expo-location": "~57.0.19",
+     "expo-secure-store": "^57.0.4",
+     "expo-splash-screen": "~57.0.9",
++    "expo-sqlite": "~57.0.3",
+     "expo-status-bar": "~57.0.1",
+     "expo-web-browser": "~57.0.3",
+     "lucide-react-native": "^1.47.0",
+     "react": "19.2.3",
+     "react-native": "0.86.3",
++    "react-native-agora": "^4.6.4",
+     "react-native-safe-area-context": "~5.7.0",
+     "react-native-screens": "~4.26.2",
+     "react-native-svg": "15.15.4",
+-    "react-native-webview": "13.16.1",
+-    "@supabase/supabase-js": "^2.48.1"
++    "react-native-webview": "13.16.1"
+   },
+   "devDependencies": {
+     "@types/country-telephone-data": "^0.6.3",
+diff --git a/apps/requester/src/navigation/MainNavigator.tsx b/apps/requester/src/navigation/MainNavigator.tsx
+index d83cd52..f6c8a26 100644
+--- a/apps/requester/src/navigation/MainNavigator.tsx
++++ b/apps/requester/src/navigation/MainNavigator.tsx
+@@ -2,6 +2,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
+ import TabNavigator from "./TabNavigator";
+ import CreateErrandScreen from "../screens/CreateErrandScreen";
+ import ErrandDetailScreen from "../screens/ErrandDetailScreen";
++import ChatScreen from "../screens/ChatScreen";
+ import type { MainStackParamList } from "./types";
+ 
+ // ErrandTracking (live runner tracking) lands in later work. Tabs
+@@ -24,6 +25,7 @@ export default function MainNavigator() {
+         component={ErrandDetailScreen}
+         options={{ headerShown: true, title: "Errand" }}
+       />
++      <Stack.Screen name="Chat" component={ChatScreen} options={{ headerShown: true, title: "Chat" }} />
+     </Stack.Navigator>
+   );
+ }
+diff --git a/apps/requester/src/navigation/types.ts b/apps/requester/src/navigation/types.ts
+index 032473c..32e2e52 100644
+--- a/apps/requester/src/navigation/types.ts
++++ b/apps/requester/src/navigation/types.ts
+@@ -14,6 +14,7 @@ export type MainStackParamList = {
+   CreateErrand: { errandId?: string } | undefined;
+   ErrandDetail: { errandId: string };
+   ErrandTracking: { errandId: string };
++  Chat: { errandId: string };
+ };
+ 
+ export type RootStackParamList = {
+diff --git a/apps/requester/src/screens/ErrandDetailScreen.tsx b/apps/requester/src/screens/ErrandDetailScreen.tsx
+index 09764c3..c36ffea 100644
+--- a/apps/requester/src/screens/ErrandDetailScreen.tsx
++++ b/apps/requester/src/screens/ErrandDetailScreen.tsx
+@@ -16,6 +16,16 @@ import type { MainStackParamList } from "../navigation/types";
+ 
+ const theme = getTheme("light");
+ 
++// Mirrors apps/api's lib/chat-server.ts CHAT_ALLOWED_STATUSES — chat/calls
++// only make sense once a runner's attached to the errand, through delivery.
++const CHAT_ALLOWED_STATUSES = new Set<ErrandStatus>([
++  "accepted",
++  "en_route_to_pickup",
++  "in_progress",
++  "en_route_to_delivery",
++  "delivered",
++]);
++
+ const CATEGORY_LABELS: Record<Errand["category"], string> = {
+   grocery: "Grocery",
+   pharmacy: "Pharmacy",
+@@ -186,6 +196,14 @@ export default function ErrandDetailScreen() {
+         </View>
+       ) : null}
+ 
++      {CHAT_ALLOWED_STATUSES.has(errand.status) ? (
++        <Button
++          label="Message runner"
++          variant="secondary"
++          onPress={() => navigation.navigate("Chat", { errandId: errand.id })}
++        />
++      ) : null}
++
+       <Text style={styles.category}>{CATEGORY_LABELS[errand.category]}</Text>
+       <Text style={styles.meta}>Posted {formatDateTime(errand.createdAt)}</Text>
+       {errand.urgency === "scheduled" && errand.scheduledFor ? (
+diff --git a/apps/runner/app.json b/apps/runner/app.json
+index 7e5b60c..1426453 100644
+--- a/apps/runner/app.json
++++ b/apps/runner/app.json
+@@ -8,7 +8,11 @@
+     "icon": "./assets/icon.png",
+     "userInterfaceStyle": "light",
+     "ios": {
+-      "supportsTablet": true
++      "supportsTablet": true,
++      "infoPlist": {
++        "NSCameraUsageDescription": "Gracerandly uses your camera for video calls with your requester/runner.",
++        "NSMicrophoneUsageDescription": "Gracerandly uses your microphone for voice notes and calls."
++      }
+     },
+     "android": {
+       "adaptiveIcon": {
+@@ -17,7 +21,12 @@
+         "backgroundImage": "./assets/android-icon-background.png",
+         "monochromeImage": "./assets/android-icon-monochrome.png"
+       },
+-      "predictiveBackGestureEnabled": false
++      "predictiveBackGestureEnabled": false,
++      "permissions": [
++        "RECORD_AUDIO",
++        "CAMERA",
++        "MODIFY_AUDIO_SETTINGS"
++      ]
+     },
+     "web": {
+       "favicon": "./assets/favicon.png"
+@@ -39,6 +48,12 @@
+           "photosPermission": "Gracerandly uses your photos to set your profile picture.",
+           "cameraPermission": "Gracerandly uses your camera to take a profile picture."
+         }
++      ],
++      [
++        "expo-audio",
++        {
++          "microphonePermission": "Gracerandly uses your microphone for voice notes and calls."
++        }
+       ]
+     ]
+   }
+diff --git a/apps/runner/package.json b/apps/runner/package.json
+index 4465e07..3596f94 100644
+--- a/apps/runner/package.json
++++ b/apps/runner/package.json
+@@ -13,8 +13,10 @@
+     "@supabase/supabase-js": "^2.48.1",
+     "country-telephone-data": "^0.6.3",
+     "expo": "~57.0.24",
++    "expo-audio": "~57.0.5",
+     "expo-blur": "~57.0.3",
+     "expo-constants": "~57.0.19",
++    "expo-file-system": "~57.0.7",
+     "expo-font": "~57.0.4",
+     "expo-image-manipulator": "~57.0.19",
+     "expo-image-picker": "~57.0.19",
+@@ -22,12 +24,13 @@
+     "expo-linking": "~57.0.10",
+     "expo-location": "~57.0.19",
+     "expo-secure-store": "^57.0.4",
+-    "expo-sqlite": "~57.0.3",
+     "expo-splash-screen": "~57.0.9",
++    "expo-sqlite": "~57.0.3",
+     "expo-status-bar": "~57.0.1",
+     "lucide-react-native": "^1.47.0",
+     "react": "19.2.3",
+     "react-native": "0.86.3",
++    "react-native-agora": "^4.6.4",
+     "react-native-safe-area-context": "~5.7.0",
+     "react-native-screens": "~4.26.2",
+     "react-native-svg": "15.15.4"
+diff --git a/apps/runner/src/lib/chatDb.ts b/apps/runner/src/lib/chatDb.ts
+index 6b942ac..0e36da7 100644
+--- a/apps/runner/src/lib/chatDb.ts
++++ b/apps/runner/src/lib/chatDb.ts
+@@ -1,13 +1,23 @@
+ /**
+- * The runner's own permanent copy of chat history — the server never
++ * This device's own permanent copy of chat history — the server never
+  * keeps one (see apps/api's lib/chat-server.ts), so this is the only
+  * place a conversation actually lives long-term. Stored in this app's
+  * private SQLite database; nothing here ever leaves the device except
+  * over the WebSocket at send time.
++ *
++ * Voice notes are stored right in `content` as base64 (same as they
++ * travel over the wire) — fine for short notes; if this ever grows,
++ * moving audio to files on disk with just a path here is the obvious
++ * next step.
+  */
+ import * as SQLite from "expo-sqlite";
+ import type { ChatMessage } from "@gracerandly/shared-types";
+ 
++/** What's stored/rendered locally: always a plain message (edits are
++ * applied to the original row rather than stored as their own bubble),
++ * plus whether it's been edited since it was first sent. */
++export type LocalChatMessage = ChatMessage & { edited: boolean };
++
+ const db = SQLite.openDatabaseSync("gracerandly_chat.db");
+ 
+ let initialized = false;
+@@ -24,24 +34,67 @@ function ensureInitialized() {
+     );
+     CREATE INDEX IF NOT EXISTS idx_messages_errand ON messages(errandId, createdAt);
+   `);
++  // Columns added after the first chat release — ALTER TABLE has no
++  // "IF NOT EXISTS" in SQLite, so just try each and ignore "duplicate
++  // column" failures on a database that already has them.
++  for (const statement of [
++    "ALTER TABLE messages ADD COLUMN contentType TEXT NOT NULL DEFAULT 'text'",
++    "ALTER TABLE messages ADD COLUMN edited INTEGER NOT NULL DEFAULT 0",
++  ]) {
++    try {
++      db.execSync(statement);
++    } catch {
++      // already exists
++    }
++  }
+   initialized = true;
+ }
+ 
++interface Row {
++  id: string;
++  errandId: string;
++  senderRole: "requester" | "runner";
++  senderId: string;
++  content: string;
++  contentType: "text" | "audio";
++  edited: number;
++  createdAt: string;
++}
++
+ /** Insert-or-replace by id, so re-saving a message already on disk (e.g. a
+  * duplicate delivery before an ack lands) is a harmless no-op rather than
+  * a second row. */
+-export function saveMessage(message: ChatMessage): void {
++export function saveMessage(message: Pick<ChatMessage, "id" | "errandId" | "senderRole" | "senderId" | "content" | "createdAt"> & { contentType: "text" | "audio" }): void {
+   ensureInitialized();
+   db.runSync(
+-    "INSERT OR REPLACE INTO messages (id, errandId, senderRole, senderId, content, createdAt) VALUES (?, ?, ?, ?, ?, ?)",
+-    [message.id, message.errandId, message.senderRole, message.senderId, message.content, message.createdAt]
++    "INSERT OR REPLACE INTO messages (id, errandId, senderRole, senderId, content, contentType, edited, createdAt) VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT edited FROM messages WHERE id = ?), 0), ?)",
++    [message.id, message.errandId, message.senderRole, message.senderId, message.content, message.contentType, message.id, message.createdAt]
+   );
+ }
+ 
+-export function getMessages(errandId: string): ChatMessage[] {
++/** Applies an edit to a message already in local history. No-op if the
++ * message isn't found (e.g. history was cleared) — nothing to update. */
++export function applyEdit(targetMessageId: string, content: string): void {
+   ensureInitialized();
+-  return db.getAllSync<ChatMessage>(
+-    "SELECT id, errandId, senderRole, senderId, content, createdAt FROM messages WHERE errandId = ? ORDER BY createdAt ASC",
+-    [errandId]
+-  );
++  db.runSync("UPDATE messages SET content = ?, edited = 1 WHERE id = ?", [content, targetMessageId]);
++}
++
++export function getMessages(errandId: string): LocalChatMessage[] {
++  ensureInitialized();
++  return db
++    .getAllSync<Row>(
++      "SELECT id, errandId, senderRole, senderId, content, contentType, edited, createdAt FROM messages WHERE errandId = ? ORDER BY createdAt ASC",
++      [errandId]
++    )
++    .map((row) => ({
++      id: row.id,
++      errandId: row.errandId,
++      senderRole: row.senderRole,
++      senderId: row.senderId,
++      kind: "message" as const,
++      contentType: row.contentType,
++      content: row.content,
++      edited: row.edited === 1,
++      createdAt: row.createdAt,
++    }));
+ }
+diff --git a/apps/runner/src/lib/chatSocket.ts b/apps/runner/src/lib/chatSocket.ts
+index 5d58086..7d28df5 100644
+--- a/apps/runner/src/lib/chatSocket.ts
++++ b/apps/runner/src/lib/chatSocket.ts
+@@ -1,17 +1,27 @@
+ /**
+- * Runner-side WebSocket client for apps/api's lib/chat-server.ts. Owns the
+- * connection lifecycle (connect, reconnect with backoff, clean
++ * WebSocket client for apps/api's lib/chat-server.ts — shared shape between
++ * the Runner and Requester apps (identical apart from the `role` passed in).
++ *
++ * Owns the connection lifecycle (connect, reconnect with backoff, clean
+  * disconnect), keeps the on-screen message list in sync with local SQLite
+  * (see chatDb.ts — that's the real chat history; this hook's in-memory
+- * state is just what's currently rendered), and handles the ack handshake
+- * so the server can drop its copy of a message once this device has it.
++ * state is just what's currently rendered), handles the ack handshake so
++ * the server can drop its copy of a message once this device has it, and
++ * tracks call state (ringing / incoming / active) driven by the same
++ * socket's call-* signaling messages.
++ *
++ * Calls only ring while this hook is mounted (i.e. the chat screen is
++ * open) — there's no app-wide socket yet, so an app that isn't on the chat
++ * screen can't be rung. Worth revisiting alongside push notifications.
+  */
+ import { useCallback, useEffect, useRef, useState } from "react";
+-import type { ChatMessage } from "@gracerandly/shared-types";
+ import { API_BASE_URL } from "./apiClient";
+-import { getMessages, saveMessage } from "./chatDb";
++import { applyEdit, getMessages, saveMessage, type LocalChatMessage } from "./chatDb";
+ 
++export type ChatRole = "requester" | "runner";
+ export type ChatConnectionState = "connecting" | "open" | "closed";
++export type CallMode = "audio" | "video";
++export type CallState = "idle" | "outgoing" | "incoming" | "active";
+ 
+ const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 10000]; // caps at 10s
+ 
+@@ -21,34 +31,53 @@ function wsUrl(errandId: string, token: string): string {
+ }
+ 
+ interface ServerMessage {
+-  type: "message" | "stored" | "error";
++  type: "message" | "stored" | "error" | "call-invite" | "call-accept" | "call-decline" | "call-end" | "call-unavailable";
+   id?: string;
+   errandId?: string;
+-  senderRole?: "requester" | "runner";
++  senderRole?: ChatRole;
+   senderId?: string;
++  kind?: "message" | "edit";
++  contentType?: "text" | "audio";
++  targetMessageId?: string;
+   content?: string;
+   createdAt?: string;
+   clientId?: string;
+-  message?: string;
++  mode?: CallMode;
+ }
+ 
+-export function useChat(errandId: string, token: string | null, ownUserId: string | null) {
+-  const [messages, setMessages] = useState<ChatMessage[]>(() => getMessages(errandId));
++interface UseChatArgs {
++  errandId: string;
++  token: string | null;
++  ownUserId: string | null;
++  role: ChatRole;
++}
++
++export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
++  const [messages, setMessages] = useState<LocalChatMessage[]>(() => getMessages(errandId));
+   const [connectionState, setConnectionState] = useState<ChatConnectionState>("connecting");
++  const [callState, setCallState] = useState<CallState>("idle");
++  const [callMode, setCallMode] = useState<CallMode>("audio");
++  const [callUnavailable, setCallUnavailable] = useState(false);
+ 
+   const wsRef = useRef<WebSocket | null>(null);
+   const reconnectAttempt = useRef(0);
+   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+-  // Messages sent but not yet confirmed with a "stored" reply, keyed by
+-  // the clientId this hook made up for them — see chat-server.ts's
+-  // protocol doc for why a client-supplied id is used for correlation
+-  // instead of relying on response order.
+-  const pendingSends = useRef<Map<string, { content: string }>>(new Map());
++  // Sent but not yet confirmed with a "stored" reply, keyed by a
++  // client-made id — see chat-server.ts's protocol doc for why a client
++  // id is used instead of relying on response order.
++  const pendingSends = useRef<Map<string, { content: string; contentType: "text" | "audio" }>>(new Map());
+   const closedByUs = useRef(false);
+ 
+-  const appendMessage = useCallback((message: ChatMessage) => {
++  const addMessage = useCallback((message: Omit<LocalChatMessage, "kind" | "edited">) => {
+     saveMessage(message);
+-    setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
++    setMessages((prev) =>
++      prev.some((m) => m.id === message.id) ? prev : [...prev, { ...message, kind: "message", edited: false }]
++    );
++  }, []);
++
++  const editLocal = useCallback((targetMessageId: string, content: string) => {
++    applyEdit(targetMessageId, content);
++    setMessages((prev) => prev.map((m) => (m.id === targetMessageId ? { ...m, content, edited: true } : m)));
+   }, []);
+ 
+   useEffect(() => {
+@@ -73,34 +102,62 @@ export function useChat(errandId: string, token: string | null, ownUserId: strin
+           return;
+         }
+ 
+-        if (data.type === "message" && data.id && data.senderRole && data.senderId && data.content && data.createdAt) {
+-          appendMessage({
+-            id: data.id,
+-            errandId,
+-            senderRole: data.senderRole,
+-            senderId: data.senderId,
+-            content: data.content,
+-            createdAt: data.createdAt,
+-          });
+-          ws.send(JSON.stringify({ type: "ack", id: data.id }));
+-        } else if (data.type === "stored" && data.id && data.createdAt) {
+-          const pending = data.clientId ? pendingSends.current.get(data.clientId) : undefined;
+-          if (pending) {
+-            pendingSends.current.delete(data.clientId!);
+-            appendMessage({
+-              id: data.id,
+-              errandId,
+-              senderRole: "runner",
+-              senderId: ownUserId ?? "",
+-              content: pending.content,
+-              createdAt: data.createdAt,
+-            });
++        switch (data.type) {
++          case "message": {
++            if (!data.id || !data.senderRole || !data.senderId || !data.content || !data.createdAt) return;
++            if (data.kind === "edit" && data.targetMessageId) {
++              editLocal(data.targetMessageId, data.content);
++            } else {
++              addMessage({
++                id: data.id,
++                errandId,
++                senderRole: data.senderRole,
++                senderId: data.senderId,
++                contentType: data.contentType ?? "text",
++                content: data.content,
++                createdAt: data.createdAt,
++              });
++            }
++            ws.send(JSON.stringify({ type: "ack", id: data.id }));
++            break;
+           }
++          case "stored": {
++            const pending = data.clientId ? pendingSends.current.get(data.clientId) : undefined;
++            if (pending && data.id && data.createdAt) {
++              pendingSends.current.delete(data.clientId!);
++              addMessage({
++                id: data.id,
++                errandId,
++                senderRole: role,
++                senderId: ownUserId ?? "",
++                contentType: pending.contentType,
++                content: pending.content,
++                createdAt: data.createdAt,
++              });
++            }
++            break;
++          }
++          case "call-invite":
++            setCallMode(data.mode ?? "audio");
++            setCallState("incoming");
++            break;
++          case "call-accept":
++            setCallState((s) => (s === "outgoing" ? "active" : s));
++            break;
++          case "call-decline":
++          case "call-end":
++            setCallState("idle");
++            break;
++          case "call-unavailable":
++            setCallState("idle");
++            setCallUnavailable(true);
++            break;
+         }
+       };
+ 
+       ws.onclose = () => {
+         setConnectionState("closed");
++        setCallState("idle"); // a dropped socket can't carry a call's signaling
+         if (closedByUs.current) return;
+         const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt.current, RECONNECT_DELAYS_MS.length - 1)];
+         reconnectAttempt.current += 1;
+@@ -108,9 +165,7 @@ export function useChat(errandId: string, token: string | null, ownUserId: strin
+       };
+ 
+       ws.onerror = () => {
+-        // onclose fires right after in every browser/RN WebSocket
+-        // implementation — reconnect is scheduled there, not here, so
+-        // this is just a no-op to prevent an unhandled-error warning.
++        // onclose fires right after — reconnect is scheduled there.
+       };
+     }
+ 
+@@ -121,19 +176,81 @@ export function useChat(errandId: string, token: string | null, ownUserId: strin
+       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+       wsRef.current?.close();
+     };
+-  }, [errandId, token, appendMessage, ownUserId]);
++  }, [errandId, token, role, ownUserId, addMessage, editLocal]);
++
++  const rawSend = useCallback((payload: unknown): boolean => {
++    if (wsRef.current?.readyState !== WebSocket.OPEN) return false;
++    wsRef.current.send(JSON.stringify(payload));
++    return true;
++  }, []);
+ 
+-  const sendMessage = useCallback(
+-    (content: string) => {
++  const sendContent = useCallback(
++    (content: string, contentType: "text" | "audio") => {
+       const trimmed = content.trim();
+-      if (!trimmed || wsRef.current?.readyState !== WebSocket.OPEN) return false;
++      if (!trimmed) return false;
+       const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+-      pendingSends.current.set(clientId, { content: trimmed });
+-      wsRef.current.send(JSON.stringify({ type: "message", content: trimmed, clientId }));
++      if (!rawSend({ type: "message", content: trimmed, contentType, clientId })) return false;
++      pendingSends.current.set(clientId, { content: trimmed, contentType });
++      return true;
++    },
++    [rawSend]
++  );
++
++  const sendText = useCallback((content: string) => sendContent(content, "text"), [sendContent]);
++  /** `base64Audio` is the recorded voice note's file contents, base64-encoded. */
++  const sendAudio = useCallback((base64Audio: string) => sendContent(base64Audio, "audio"), [sendContent]);
++
++  /** Edits one of this user's own text messages — applied locally right
++   * away, then sent so the other device can update its copy too. */
++  const sendEdit = useCallback(
++    (targetMessageId: string, content: string) => {
++      const trimmed = content.trim();
++      if (!trimmed) return false;
++      if (!rawSend({ type: "edit", targetMessageId, content: trimmed })) return false;
++      editLocal(targetMessageId, trimmed);
+       return true;
+     },
+-    []
++    [rawSend, editLocal]
++  );
++
++  const startCall = useCallback(
++    (mode: CallMode) => {
++      setCallUnavailable(false);
++      if (rawSend({ type: "call-invite", mode })) {
++        setCallMode(mode);
++        setCallState("outgoing");
++      } else {
++        setCallUnavailable(true);
++      }
++    },
++    [rawSend]
+   );
++  const acceptCall = useCallback(() => {
++    if (rawSend({ type: "call-accept" })) setCallState("active");
++  }, [rawSend]);
++  const declineCall = useCallback(() => {
++    rawSend({ type: "call-decline" });
++    setCallState("idle");
++  }, [rawSend]);
++  const endCall = useCallback(() => {
++    rawSend({ type: "call-end" });
++    setCallState("idle");
++  }, [rawSend]);
++  const dismissCallUnavailable = useCallback(() => setCallUnavailable(false), []);
+ 
+-  return { messages, connectionState, sendMessage };
++  return {
++    messages,
++    connectionState,
++    sendText,
++    sendAudio,
++    sendEdit,
++    callState,
++    callMode,
++    callUnavailable,
++    dismissCallUnavailable,
++    startCall,
++    acceptCall,
++    declineCall,
++    endCall,
++  };
+ }
+diff --git a/apps/runner/src/screens/ChatScreen.tsx b/apps/runner/src/screens/ChatScreen.tsx
+index f15f914..ee1999a 100644
+--- a/apps/runner/src/screens/ChatScreen.tsx
++++ b/apps/runner/src/screens/ChatScreen.tsx
+@@ -1,59 +1,206 @@
+-import { useRef, useState } from "react";
+-import { View, Text, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform } from "react-native";
++import { useEffect, useLayoutEffect, useRef, useState } from "react";
++import {
++  View,
++  Text,
++  StyleSheet,
++  FlatList,
++  TextInput,
++  KeyboardAvoidingView,
++  Platform,
++  Pressable,
++  Alert,
++} from "react-native";
+ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
++import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
++import * as FileSystem from "expo-file-system/legacy";
++import { Phone, Video, Mic, Send, X, Check } from "lucide-react-native";
+ import { getTheme } from "@gracerandly/theme";
+-import type { ChatMessage } from "@gracerandly/shared-types";
+ import { useAuth } from "../context/AuthContext";
+ import { useChat } from "../lib/chatSocket";
++import { fetchChatParticipant, type ChatParticipant } from "../lib/chatApi";
++import type { LocalChatMessage } from "../lib/chatDb";
++import Avatar from "../components/Avatar";
++import VoiceNoteBubble from "../components/VoiceNoteBubble";
++import CallOverlay from "../components/CallOverlay";
+ import type { MainStackParamList } from "../navigation/types";
+ 
+ const theme = getTheme("light");
+ 
++const ROLE = "runner" as const;
++const MAX_VOICE_NOTE_SECONDS = 60;
++
+ type Props = NativeStackScreenProps<MainStackParamList, "Chat">;
+ 
+ function formatTime(iso: string): string {
+   return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+ }
+ 
+-export default function ChatScreen({ route }: Props) {
++export default function ChatScreen({ route, navigation }: Props) {
+   const { errandId } = route.params;
+   const { token, user } = useAuth();
+-  const { messages, connectionState, sendMessage } = useChat(errandId, token, user?.id ?? null);
++  const chat = useChat({ errandId, token, ownUserId: user?.id ?? null, role: ROLE });
++  const [participant, setParticipant] = useState<ChatParticipant | null>(null);
+   const [draft, setDraft] = useState("");
+-  const listRef = useRef<FlatList<ChatMessage>>(null);
++  const [editingId, setEditingId] = useState<string | null>(null);
++  const listRef = useRef<FlatList<LocalChatMessage>>(null);
++
++  // --- Voice recording ---
++  const recorder = useAudioRecorder(RecordingPresets.LOW_QUALITY);
++  const [isRecording, setIsRecording] = useState(false);
++  const [recordSeconds, setRecordSeconds] = useState(0);
++
++  useEffect(() => {
++    if (!token) return;
++    fetchChatParticipant(ROLE, errandId, token)
++      .then(setParticipant)
++      .catch(() => {
++        // Header just falls back to a generic label — chat still works.
++      });
++  }, [errandId, token]);
++
++  const otherName = participant?.name ?? "Requester";
++
++  useLayoutEffect(() => {
++    navigation.setOptions({
++      headerTitle: () => (
++        <View style={styles.headerTitle}>
++          <Avatar name={otherName} uri={participant?.avatarUrl} size={32} />
++          <Text style={styles.headerName} numberOfLines={1}>
++            {otherName}
++          </Text>
++        </View>
++      ),
++      headerRight: () => (
++        <View style={styles.headerActions}>
++          <Pressable hitSlop={8} onPress={() => chat.startCall("audio")} disabled={chat.connectionState !== "open"}>
++            <Phone size={22} color={chat.connectionState === "open" ? theme.colors.primary : theme.colors.textMuted} />
++          </Pressable>
++          <Pressable hitSlop={8} onPress={() => chat.startCall("video")} disabled={chat.connectionState !== "open"}>
++            <Video size={22} color={chat.connectionState === "open" ? theme.colors.primary : theme.colors.textMuted} />
++          </Pressable>
++        </View>
++      ),
++    });
++    // chat's call starters are stable callbacks; connectionState is the only
++    // part of it the header actually needs to re-render for.
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [navigation, otherName, participant?.avatarUrl, chat.connectionState]);
++
++  useEffect(() => {
++    if (chat.callUnavailable) {
++      Alert.alert("Can't call right now", `${otherName} isn't online in this chat.`, [
++        { text: "OK", onPress: chat.dismissCallUnavailable },
++      ]);
++    }
++  }, [chat.callUnavailable, otherName, chat.dismissCallUnavailable]);
+ 
+   function handleSend() {
+-    if (sendMessage(draft)) setDraft("");
++    if (editingId) {
++      if (chat.sendEdit(editingId, draft)) {
++        setEditingId(null);
++        setDraft("");
++      }
++      return;
++    }
++    if (chat.sendText(draft)) setDraft("");
++  }
++
++  function startEditing(message: LocalChatMessage) {
++    if (message.senderRole !== ROLE || message.contentType !== "text") return;
++    setEditingId(message.id);
++    setDraft(message.content);
+   }
+ 
++  function cancelEditing() {
++    setEditingId(null);
++    setDraft("");
++  }
++
++  async function startRecording() {
++    const permission = await requestRecordingPermissionsAsync();
++    if (!permission.granted) {
++      Alert.alert("Microphone needed", "Allow microphone access to send voice notes.");
++      return;
++    }
++    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
++    await recorder.prepareToRecordAsync();
++    recorder.record();
++    setRecordSeconds(0);
++    setIsRecording(true);
++  }
++
++  async function stopRecording(send: boolean) {
++    setIsRecording(false);
++    await recorder.stop();
++    await setAudioModeAsync({ allowsRecording: false });
++    const uri = recorder.uri;
++    if (!send || !uri) return;
++    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
++    if (!chat.sendAudio(base64)) Alert.alert("Not connected", "Couldn't send the voice note — try again once reconnected.");
++  }
++
++  // Tick the visible timer while recording, and stop-and-send at the cap.
++  useEffect(() => {
++    if (!isRecording) return;
++    const interval = setInterval(() => {
++      setRecordSeconds((s) => {
++        if (s + 1 >= MAX_VOICE_NOTE_SECONDS) {
++          stopRecording(true);
++          return s + 1;
++        }
++        return s + 1;
++      });
++    }, 1000);
++    return () => clearInterval(interval);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [isRecording]);
++
+   return (
+     <KeyboardAvoidingView
+       style={styles.container}
+       behavior={Platform.OS === "ios" ? "padding" : undefined}
+       keyboardVerticalOffset={90}
+     >
+-      {connectionState !== "open" ? (
++      {chat.connectionState !== "open" ? (
+         <View style={styles.banner}>
+           <Text style={styles.bannerText}>
+-            {connectionState === "connecting" ? "Connecting…" : "Disconnected — reconnecting…"}
++            {chat.connectionState === "connecting" ? "Connecting…" : "Disconnected — reconnecting…"}
+           </Text>
+         </View>
+       ) : null}
+ 
+       <FlatList
+         ref={listRef}
+-        data={messages}
++        data={chat.messages}
+         keyExtractor={(item) => item.id}
+         contentContainerStyle={styles.list}
+         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+         renderItem={({ item }) => {
+-          const isMine = item.senderRole === "runner";
++          const isMine = item.senderRole === ROLE;
++          const avatar = isMine ? (
++            <Avatar name={user?.fullName ?? "Me"} uri={user?.avatarUrl} size={28} />
++          ) : (
++            <Avatar name={otherName} uri={participant?.avatarUrl} size={28} />
++          );
+           return (
+             <View style={[styles.bubbleRow, isMine && styles.bubbleRowMine]}>
+-              <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleTheirs]}>
+-                <Text style={[styles.bubbleText, isMine && styles.bubbleTextMine]}>{item.content}</Text>
+-                <Text style={[styles.bubbleTime, isMine && styles.bubbleTimeMine]}>{formatTime(item.createdAt)}</Text>
+-              </View>
++              {!isMine ? avatar : null}
++              <Pressable
++                onLongPress={() => startEditing(item)}
++                delayLongPress={350}
++                style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleTheirs]}
++              >
++                {item.contentType === "audio" ? (
++                  <VoiceNoteBubble messageId={item.id} base64Audio={item.content} isMine={isMine} />
++                ) : (
++                  <Text style={[styles.bubbleText, isMine && styles.bubbleTextMine]}>{item.content}</Text>
++                )}
++                <Text style={[styles.bubbleTime, isMine && styles.bubbleTimeMine]}>
++                  {item.edited ? "edited · " : ""}
++                  {formatTime(item.createdAt)}
++                </Text>
++              </Pressable>
++              {isMine ? avatar : null}
+             </View>
+           );
+         }}
+@@ -62,34 +209,77 @@ export default function ChatScreen({ route }: Props) {
+         }
+       />
+ 
+-      <View style={styles.composer}>
+-        <TextInput
+-          style={styles.input}
+-          value={draft}
+-          onChangeText={setDraft}
+-          placeholder="Message the requester…"
+-          placeholderTextColor={theme.colors.textMuted}
+-          multiline
+-          maxLength={2000}
++      {editingId ? (
++        <View style={styles.editBar}>
++          <Text style={styles.editBarText}>Editing message</Text>
++          <Pressable hitSlop={8} onPress={cancelEditing}>
++            <X size={18} color={theme.colors.textMuted} />
++          </Pressable>
++        </View>
++      ) : null}
++
++      {isRecording ? (
++        <View style={styles.composer}>
++          <Pressable hitSlop={8} onPress={() => stopRecording(false)}>
++            <X size={24} color={theme.colors.danger} />
++          </Pressable>
++          <Text style={styles.recordingText}>
++            ● Recording {Math.floor(recordSeconds / 60)}:{String(recordSeconds % 60).padStart(2, "0")}
++          </Text>
++          <Pressable hitSlop={8} onPress={() => stopRecording(true)}>
++            <Send size={24} color={theme.colors.primary} />
++          </Pressable>
++        </View>
++      ) : (
++        <View style={styles.composer}>
++          <TextInput
++            style={styles.input}
++            value={draft}
++            onChangeText={setDraft}
++            placeholder={`Message ${otherName}…`}
++            placeholderTextColor={theme.colors.textMuted}
++            multiline
++            maxLength={2000}
++          />
++          {draft.trim() ? (
++            <Pressable hitSlop={8} onPress={handleSend} disabled={chat.connectionState !== "open"} style={styles.actionButton}>
++              {editingId ? (
++                <Check size={24} color={chat.connectionState === "open" ? theme.colors.primary : theme.colors.textMuted} />
++              ) : (
++                <Send size={24} color={chat.connectionState === "open" ? theme.colors.primary : theme.colors.textMuted} />
++              )}
++            </Pressable>
++          ) : (
++            <Pressable hitSlop={8} onPress={startRecording} disabled={chat.connectionState !== "open"} style={styles.actionButton}>
++              <Mic size={24} color={chat.connectionState === "open" ? theme.colors.primary : theme.colors.textMuted} />
++            </Pressable>
++          )}
++        </View>
++      )}
++
++      {token ? (
++        <CallOverlay
++          role={ROLE}
++          errandId={errandId}
++          authToken={token}
++          participant={participant}
++          callState={chat.callState}
++          callMode={chat.callMode}
++          onAccept={chat.acceptCall}
++          onDecline={chat.declineCall}
++          onEnd={chat.endCall}
+         />
+-        <Text
+-          style={[styles.sendButton, (!draft.trim() || connectionState !== "open") && styles.sendButtonDisabled]}
+-          onPress={handleSend}
+-        >
+-          Send
+-        </Text>
+-      </View>
++      ) : null}
+     </KeyboardAvoidingView>
+   );
+ }
+ 
+ const styles = StyleSheet.create({
+   container: { flex: 1, backgroundColor: theme.colors.background },
+-  banner: {
+-    backgroundColor: theme.colors.accent,
+-    paddingVertical: 6,
+-    alignItems: "center",
+-  },
++  headerTitle: { flexDirection: "row", alignItems: "center", gap: 10 },
++  headerName: { fontFamily: theme.fonts.uiSemibold, fontSize: 17, color: theme.colors.text, maxWidth: 180 },
++  headerActions: { flexDirection: "row", gap: 22, alignItems: "center" },
++  banner: { backgroundColor: theme.colors.accent, paddingVertical: 6, alignItems: "center" },
+   bannerText: { fontFamily: theme.fonts.ui, fontSize: 12, color: theme.colors.text },
+   list: { padding: theme.spacing.md, flexGrow: 1 },
+   emptyText: {
+@@ -99,28 +289,29 @@ const styles = StyleSheet.create({
+     textAlign: "center",
+     marginTop: theme.spacing.xl,
+   },
+-  bubbleRow: { flexDirection: "row", marginBottom: 10 },
++  bubbleRow: { flexDirection: "row", alignItems: "flex-end", marginBottom: 10, gap: 6 },
+   bubbleRowMine: { justifyContent: "flex-end" },
+-  bubble: {
+-    maxWidth: "78%",
+-    borderRadius: theme.radius.lg,
+-    paddingHorizontal: 14,
+-    paddingVertical: 10,
+-  },
++  bubble: { maxWidth: "72%", borderRadius: theme.radius.lg, paddingHorizontal: 14, paddingVertical: 10 },
+   bubbleTheirs: {
+     backgroundColor: theme.colors.surface,
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     borderBottomLeftRadius: 4,
+   },
+-  bubbleMine: {
+-    backgroundColor: theme.colors.primary,
+-    borderBottomRightRadius: 4,
+-  },
++  bubbleMine: { backgroundColor: theme.colors.primary, borderBottomRightRadius: 4 },
+   bubbleText: { fontFamily: theme.fonts.uiMedium, fontSize: 15, color: theme.colors.text },
+   bubbleTextMine: { color: theme.colors.textOnPrimary },
+   bubbleTime: { fontFamily: theme.fonts.ui, fontSize: 10, color: theme.colors.textMuted, marginTop: 4, textAlign: "right" },
+   bubbleTimeMine: { color: theme.colors.textOnPrimary, opacity: 0.8 },
++  editBar: {
++    flexDirection: "row",
++    justifyContent: "space-between",
++    alignItems: "center",
++    paddingHorizontal: theme.spacing.md,
++    paddingVertical: 8,
++    backgroundColor: theme.colors.accent,
++  },
++  editBarText: { fontFamily: theme.fonts.uiMedium, fontSize: 13, color: theme.colors.text },
+   composer: {
+     flexDirection: "row",
+     alignItems: "flex-end",
+@@ -142,12 +333,6 @@ const styles = StyleSheet.create({
+     maxHeight: 120,
+     marginRight: theme.spacing.sm,
+   },
+-  sendButton: {
+-    fontFamily: theme.fonts.uiMedium,
+-    fontSize: 15,
+-    color: theme.colors.primary,
+-    paddingVertical: 12,
+-    paddingHorizontal: 4,
+-  },
+-  sendButtonDisabled: { color: theme.colors.textMuted },
++  actionButton: { paddingVertical: 10, paddingHorizontal: 4 },
++  recordingText: { flex: 1, textAlign: "center", fontFamily: theme.fonts.uiMedium, fontSize: 15, color: theme.colors.danger },
+ });
+diff --git a/packages/shared-types/src/message.ts b/packages/shared-types/src/message.ts
+index b024be7..6cea154 100644
+--- a/packages/shared-types/src/message.ts
++++ b/packages/shared-types/src/message.ts
+@@ -11,6 +11,15 @@ export interface ChatMessage {
+   errandId: string;
+   senderRole: "requester" | "runner";
+   senderId: string;
++  /** "message" is a normal chat bubble; "edit" changes a previously-sent
++   * one — see targetMessageId. */
++  kind: "message" | "edit";
++  /** "audio" means `content` is base64-encoded audio (a voice note), not
++   * a transcript. */
++  contentType: "text" | "audio";
++  /** Only present when kind is "edit" — the id of the message being
++   * edited, as found in the recipient's own local chat history. */
++  targetMessageId?: string;
+   content: string;
+   createdAt: string;
+ }
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index e585c85..88a5750 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -184,6 +184,9 @@ importers:
+       '@gracerandly/theme':
+         specifier: workspace:*
+         version: link:../../packages/theme
++      agora-token:
++        specifier: ^2.0.6
++        version: 2.0.6
+       bcryptjs:
+         specifier: ^3.0.3
+         version: 3.0.3
+@@ -275,12 +278,18 @@ importers:
+       expo:
+         specifier: ~57.0.24
+         version: 57.0.24(@babel/core@7.29.7(supports-color@8.1.1))(@expo/dom-webview@57.0.1)(react-native-webview@13.16.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@6.0.3)
++      expo-audio:
++        specifier: ~57.0.5
++        version: 57.0.5(expo-asset@57.0.18(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@6.0.3))(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+       expo-blur:
+         specifier: ~57.0.3
+         version: 57.0.3(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+       expo-constants:
+         specifier: ~57.0.19
+         version: 57.0.19(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(supports-color@8.1.1)
++      expo-file-system:
++        specifier: ~57.0.7
++        version: 57.0.7(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))
+       expo-font:
+         specifier: ~57.0.4
+         version: 57.0.4(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+@@ -305,6 +314,9 @@ importers:
+       expo-splash-screen:
+         specifier: ~57.0.9
+         version: 57.0.9(expo@57.0.24)(supports-color@8.1.1)(typescript@6.0.3)
++      expo-sqlite:
++        specifier: ~57.0.3
++        version: 57.0.3(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+       expo-status-bar:
+         specifier: ~57.0.1
+         version: 57.0.1(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+@@ -320,6 +332,9 @@ importers:
+       react-native:
+         specifier: 0.86.3
+         version: 0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1)
++      react-native-agora:
++        specifier: ^4.6.4
++        version: 4.6.4(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+       react-native-safe-area-context:
+         specifier: ~5.7.0
+         version: 5.7.0(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+@@ -372,12 +387,18 @@ importers:
+       expo:
+         specifier: ~57.0.24
+         version: 57.0.24(@babel/core@7.29.7(supports-color@8.1.1))(@expo/dom-webview@57.0.1)(react-native-webview@13.16.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@6.0.3)
++      expo-audio:
++        specifier: ~57.0.5
++        version: 57.0.5(expo-asset@57.0.18(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@6.0.3))(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+       expo-blur:
+         specifier: ~57.0.3
+         version: 57.0.3(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+       expo-constants:
+         specifier: ~57.0.19
+         version: 57.0.19(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(supports-color@8.1.1)
++      expo-file-system:
++        specifier: ~57.0.7
++        version: 57.0.7(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))
+       expo-font:
+         specifier: ~57.0.4
+         version: 57.0.4(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+@@ -417,6 +438,9 @@ importers:
+       react-native:
+         specifier: 0.86.3
+         version: 0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1)
++      react-native-agora:
++        specifier: ^4.6.4
++        version: 4.6.4(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+       react-native-safe-area-context:
+         specifier: ~5.7.0
+         version: 5.7.0(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
+@@ -1862,6 +1886,9 @@ packages:
+     engines: {node: '>=18.18'}
+     hasBin: true
+ 
++  agora-token@2.0.6:
++    resolution: {integrity: sha512-IndnG81dFxdTEj9G14FykEEilxrjPo92crGwB8ip5K/pwKNrd1pI98HZppCNNnHPhIwmAWiLmjmdBpgGB4UqKA==}
++
+   anser@1.4.10:
+     resolution: {integrity: sha512-hCv9AqTQ8ycjpSd3upOJd7vFwW1JaoYQ7tpham03GJ1ca8/65rqn0RpaWpItOAd6ylW9wAw6luXYPJIyPFVOww==}
+ 
+@@ -1969,6 +1996,9 @@ packages:
+     resolution: {integrity: sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==}
+     engines: {node: '>=0.6'}
+ 
++  bignumber.js@9.3.1:
++    resolution: {integrity: sha512-Ko0uX15oIUS7wJ3Rb30Fs6SkVbLmPBAKdlm7q9+ak9bbIeFf0MwuBsQV6z7+X768/cHsfg+WlysDWJcmthjsjQ==}
++
+   body-parser@1.20.8:
+     resolution: {integrity: sha512-JNcyFQ64OiijEkPzUBTCe+hyPXUD/3LEldGQ6iF5LR1w00mx9o7xtDWHXBY2iItjdCFGoilOLNQbH943ut7pHA==}
+     engines: {node: '>= 0.8', npm: 1.2.8000 || >= 1.4.16}
+@@ -2009,6 +2039,9 @@ packages:
+   buffer-from@1.1.2:
+     resolution: {integrity: sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ==}
+ 
++  buffer@6.0.3:
++    resolution: {integrity: sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA==}
++
+   bytes@3.1.2:
+     resolution: {integrity: sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg==}
+     engines: {node: '>= 0.8'}
+@@ -2036,6 +2069,9 @@ packages:
+     resolution: {integrity: sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA==}
+     engines: {node: '>=10'}
+ 
++  charenc@0.0.2:
++    resolution: {integrity: sha512-yrLQ/yVUFXkzg7EDQsPieE/53+0RlaWTs+wBrvW36cyilJ2SaDWfl4Yj7MtLTXleV9uEKefbAGUPv2/iWSooRA==}
++
+   chrome-launcher@0.15.2:
+     resolution: {integrity: sha512-zdLEwNo3aUVzIhKhTtXfxhdvZhUghrnmkvcAq2NoDd+LeOHKf03H5jwZ8T/STsAlzyALkBVK552iaG1fGf1xVQ==}
+     engines: {node: '>=12.13.0'}
+@@ -2143,10 +2179,18 @@ packages:
+   country-telephone-data@0.6.3:
+     resolution: {integrity: sha512-3tQLA0vec+NDVlcaHhXGqILq/oQRsv4fRi4EedCfJqUuJUjQGdcSPM8r2IJIT2kZ5yWbiOCkXMgy7YTo8FNS2w==}
+ 
++  crc-32@1.2.2:
++    resolution: {integrity: sha512-ROmzCKrTnOwybPcJApAA6WBWij23HVfGVNKqqrZpuyZOHqK2CwHSvpGuyt/UNNvaIjEd8X5IFGp4Mh+Ie1IHJQ==}
++    engines: {node: '>=0.8'}
++    hasBin: true
++
+   cross-spawn@7.0.6:
+     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
+     engines: {node: '>= 8'}
+ 
++  crypt@0.0.2:
++    resolution: {integrity: sha512-mCxBlsHFYh9C+HVpiEacem8FEBnMXgU9gy4zmNC+SXAZNB/1idgp/aulFJ4FgCi7GPEVbfyng092GqL2k2rmow==}
++
+   css-select@5.2.2:
+     resolution: {integrity: sha512-TizTzUddG/xYLA3NXodFM0fSbNizXjOKhqiQQwvhlspadZokn1KDy0NZFS0wuEubIYAV5/c1/lAr0TaaFXEXzw==}
+ 
+@@ -2161,6 +2205,9 @@ packages:
+   csstype@3.2.3:
+     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
+ 
++  cuint@0.2.2:
++    resolution: {integrity: sha512-d4ZVpCW31eWwCMe1YT3ur7mUDnTXbgwyzaL320DrcRT45rfjYxkt5QWLrmOJ+/UEAI2+fQgKe/fCjR8l4TpRgw==}
++
+   debug@2.6.9:
+     resolution: {integrity: sha512-bC7ElrdJaJnPbAP+1EotYvqZsb3ecl5wi6Bfi6BJTUcNowp6cvspg0jXznRTKDjm/E7AdgFBVeAPVMNcKGsHMA==}
+     peerDependencies:
+@@ -2402,6 +2449,9 @@ packages:
+     resolution: {integrity: sha512-i/2XbnSz/uxRCU6+NdVJgKWDTM427+MqYbkQzD321DuCQJUqOuJKIA0IM2+W2xtYHdKOmZ4dR6fExsd4SXL+WQ==}
+     engines: {node: '>=6'}
+ 
++  eventemitter3@5.0.4:
++    resolution: {integrity: sha512-mlsTRyGaPBjPedk6Bvw+aqbsXDtoAyAzm5MO7JgU+yVRyMQ5O8bD4Kcci7BS85f93veegeCPkL8R4GLClnjLFw==}
++
+   expo-asset@57.0.18:
+     resolution: {integrity: sha512-zDIQkUr0NM2S7YRj98Zohf/OBuM1q0o4ctxLz1C1oe4/33lHNLjp+2v3qUtBWVwn0zKka8UGADmS8M+83Wi6pw==}
+     peerDependencies:
+@@ -2409,6 +2459,14 @@ packages:
+       react: '*'
+       react-native: '*'
+ 
++  expo-audio@57.0.5:
++    resolution: {integrity: sha512-39fX5JC5zDvELB4/eDJPj2XAYRN0W9+K2DfDWm5N3aC5WZ7HRrhupWtT6hbH09NlfYpsRSqYOwEZnocFM42ynQ==}
++    peerDependencies:
++      expo: '*'
++      expo-asset: '*'
++      react: '*'
++      react-native: '*'
++
+   expo-blur@57.0.3:
+     resolution: {integrity: sha512-uyBeJwxIuXzWXXNrnRub5pcF8VzQsiOz0VBTWDpMG2UztmaFyfAz6pI/GCwRtWpHhiOpLoJj79WLdg1GMB+9cg==}
+     peerDependencies:
+@@ -2708,6 +2766,9 @@ packages:
+     resolution: {integrity: sha512-v3MXnZAcvnywkTUEZomIActle7RXXeedOR31wwl7VlyoXO4Qi9arvSenNQWne1TcRwhCL1HwLI21bEqdpj8/rA==}
+     engines: {node: '>=0.10.0'}
+ 
++  ieee754@1.2.1:
++    resolution: {integrity: sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA==}
++
+   ignore@5.3.2:
+     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
+     engines: {node: '>= 4'}
+@@ -2725,6 +2786,9 @@ packages:
+   is-arrayish@0.3.4:
+     resolution: {integrity: sha512-m6UrgzFVUYawGBh1dUsWR5M2Clqic9RVXC/9f8ceNlv2IcO9j9J/z8UoCLPqtsPBFNzEpfR3xftohbfqDx8EQA==}
+ 
++  is-buffer@1.1.6:
++    resolution: {integrity: sha512-NcdALwpXkTm5Zvvbk7owOUSvVvBKDgKP5/ewfXEznmQFfs4ZRmanOeKBTjRVjka3QFoN6XJ+9F3USqfHqTaU5w==}
++
+   is-core-module@2.17.0:
+     resolution: {integrity: sha512-J/vG0zBCbIKOQFfufSwyXdMrsohyJIUNkrnmo6WZGzoM7tr/lsbfW5b2BvisL6zsyMzK9UxV9L6c7AoFbyXHOA==}
+     engines: {node: '>= 0.4'}
+@@ -2783,6 +2847,9 @@ packages:
+     engines: {node: '>=6'}
+     hasBin: true
+ 
++  json-bigint@1.0.0:
++    resolution: {integrity: sha512-SiPv/8VpZuWbvLSMtTDU8hEfrZWg/mH/nV/b4o0CYbSxu1UIQPLdwKOCIyLQX+VIPO5vrLX3i8qtqFyhdPSUSQ==}
++
+   json-schema-to-ts@3.1.1:
+     resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
+     engines: {node: '>=16'}
+@@ -2953,6 +3020,9 @@ packages:
+     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
+     engines: {node: '>= 0.4'}
+ 
++  md5@2.3.0:
++    resolution: {integrity: sha512-T1GITYmFaKuO91vxyoQMFETst+O71VUPEU3ze5GNzDm0OWdP8v1ziTaAEPUr/3kLsY3Sftgz242A1SetQiDL7g==}
++
+   mdn-data@2.0.14:
+     resolution: {integrity: sha512-dn6wd0uw5GsdswPFfsgMp5NSB0/aDe6fK94YJV/AJDYXL6HVLWBsxeq7js7Ad+mU2K9LAlwpk6kN2D5mwCPVow==}
+ 
+@@ -3317,6 +3387,13 @@ packages:
+   react-is@19.3.0:
+     resolution: {integrity: sha512-UpMYezM4v5/18F28aC66AEsjXIgE02kyEMH6yLdgLXu/UTfa1Ntwck/nNLrbqJsEXW7gPb0coNO9FQse9WTovA==}
+ 
++  react-native-agora@4.6.4:
++    resolution: {integrity: sha512-CEHW/bs3UCZMJLOtK1Ojt52/3Qy2SZLKjsqnnpQuZs4vv138WpUFb3QbJc72gardVFPZ0PfeHsK5dHNIO4/ZMA==}
++    engines: {node: '>=18'}
++    peerDependencies:
++      react: '*'
++      react-native: '*'
++
+   react-native-safe-area-context@5.7.0:
+     resolution: {integrity: sha512-/9/MtQz8ODphjsLdZ+GZAIcC/RtoqW9EeShf7Uvnfgm/pzYrJ75y3PV/J1wuAV1T5Dye5ygq4EAW20RoBq0ABQ==}
+     peerDependencies:
+@@ -3607,6 +3684,9 @@ packages:
+   ts-algebra@2.0.0:
+     resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
+ 
++  ts-interface-checker@1.0.2:
++    resolution: {integrity: sha512-4IKKvhZRXhvtYF/mtu+OCfBqJKV6LczUq4kQYcpT+iSB7++R9+giWnp2ecwWMIcnG16btVOkXFnoxLSYMN1Q1g==}
++
+   tslib@2.8.1:
+     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
+ 
+@@ -5448,6 +5528,12 @@ snapshots:
+ 
+   agent-cli-detector@0.1.7: {}
+ 
++  agora-token@2.0.6:
++    dependencies:
++      crc-32: 1.2.2
++      cuint: 0.2.2
++      md5: 2.3.0
++
+   anser@1.4.10: {}
+ 
+   ansi-escapes@4.3.2:
+@@ -5584,6 +5670,8 @@ snapshots:
+ 
+   big-integer@1.6.52: {}
+ 
++  bignumber.js@9.3.1: {}
++
+   body-parser@1.20.8(supports-color@8.1.1):
+     dependencies:
+       bytes: 3.1.2
+@@ -5639,6 +5727,11 @@ snapshots:
+ 
+   buffer-from@1.1.2: {}
+ 
++  buffer@6.0.3:
++    dependencies:
++      base64-js: 1.5.1
++      ieee754: 1.2.1
++
+   bytes@3.1.2: {}
+ 
+   call-bind-apply-helpers@1.0.2:
+@@ -5666,6 +5759,8 @@ snapshots:
+       ansi-styles: 4.3.0
+       supports-color: 7.2.0
+ 
++  charenc@0.0.2: {}
++
+   chrome-launcher@0.15.2(supports-color@8.1.1):
+     dependencies:
+       '@types/node': 22.20.4
+@@ -5782,12 +5877,16 @@ snapshots:
+ 
+   country-telephone-data@0.6.3: {}
+ 
++  crc-32@1.2.2: {}
++
+   cross-spawn@7.0.6:
+     dependencies:
+       path-key: 3.1.1
+       shebang-command: 2.0.0
+       which: 2.0.2
+ 
++  crypt@0.0.2: {}
++
+   css-select@5.2.2:
+     dependencies:
+       boolbase: 1.0.0
+@@ -5805,6 +5904,8 @@ snapshots:
+ 
+   csstype@3.2.3: {}
+ 
++  cuint@0.2.2: {}
++
+   debug@2.6.9(supports-color@8.1.1):
+     dependencies:
+       ms: 2.0.0
+@@ -5998,6 +6099,8 @@ snapshots:
+ 
+   event-target-shim@5.0.1: {}
+ 
++  eventemitter3@5.0.4: {}
++
+   expo-asset@57.0.18(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@5.9.3):
+     dependencies:
+       '@expo/image-utils': 0.11.5(supports-color@8.1.1)(typescript@5.9.3)
+@@ -6020,6 +6123,13 @@ snapshots:
+       - supports-color
+       - typescript
+ 
++  expo-audio@57.0.5(expo-asset@57.0.18(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@6.0.3))(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3):
++    dependencies:
++      expo: 57.0.24(@babel/core@7.29.7(supports-color@8.1.1))(@expo/dom-webview@57.0.1)(react-native-webview@13.16.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@6.0.3)
++      expo-asset: 57.0.18(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@6.0.3)
++      react: 19.2.3
++      react-native: 0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1)
++
+   expo-blur@57.0.3(expo@57.0.24)(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3):
+     dependencies:
+       expo: 57.0.24(@babel/core@7.29.7(supports-color@8.1.1))(@expo/dom-webview@57.0.1)(react-native-webview@13.16.1(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3))(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@8.1.1)(typescript@6.0.3)
+@@ -6423,6 +6533,8 @@ snapshots:
+     dependencies:
+       safer-buffer: 2.1.2
+ 
++  ieee754@1.2.1: {}
++
+   ignore@5.3.2: {}
+ 
+   inherits@2.0.4: {}
+@@ -6435,6 +6547,8 @@ snapshots:
+ 
+   is-arrayish@0.3.4: {}
+ 
++  is-buffer@1.1.6: {}
++
+   is-core-module@2.17.0:
+     dependencies:
+       hasown: 2.0.4
+@@ -6490,6 +6604,10 @@ snapshots:
+ 
+   jsesc@3.1.0: {}
+ 
++  json-bigint@1.0.0:
++    dependencies:
++      bignumber.js: 9.3.1
++
+   json-schema-to-ts@3.1.1:
+     dependencies:
+       '@babel/runtime': 7.29.7
+@@ -6631,6 +6749,12 @@ snapshots:
+ 
+   math-intrinsics@1.1.0: {}
+ 
++  md5@2.3.0:
++    dependencies:
++      charenc: 0.0.2
++      crypt: 0.0.2
++      is-buffer: 1.1.6
++
+   mdn-data@2.0.14: {}
+ 
+   media-typer@0.3.0: {}
+@@ -7182,6 +7306,15 @@ snapshots:
+ 
+   react-is@19.3.0: {}
+ 
++  react-native-agora@4.6.4(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3):
++    dependencies:
++      buffer: 6.0.3
++      eventemitter3: 5.0.4
++      json-bigint: 1.0.0
++      react: 19.2.3
++      react-native: 0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1)
++      ts-interface-checker: 1.0.2
++
+   react-native-safe-area-context@5.7.0(react-native@0.86.3(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3):
+     dependencies:
+       react: 19.2.3
+@@ -7498,6 +7631,8 @@ snapshots:
+ 
+   ts-algebra@2.0.0: {}
+ 
++  ts-interface-checker@1.0.2: {}
++
+   tslib@2.8.1: {}
+ 
+   tsx@4.23.13:
