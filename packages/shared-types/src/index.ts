@@ -4,3 +4,4 @@ export * from "./trust-tier";
 export * from "./transaction";
 export * from "./verification";
 export * from "./message";
+export * from "./sos";

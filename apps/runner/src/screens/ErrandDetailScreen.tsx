@@ -8,6 +8,7 @@ import { apiFetch, ApiError } from "../lib/apiClient";
 import { getCurrentCoordinate, watchPosition } from "../lib/location";
 import { publishRunnerLocation, stopPublishingLocation } from "../lib/realtime";
 import Button from "../components/Button";
+import SosButton from "../components/SosButton";
 import TextField from "../components/TextField";
 import type { MainStackParamList } from "../navigation/types";
 
@@ -25,6 +26,9 @@ const CHAT_ALLOWED_STATUSES: ErrandStatus[] = [
   "en_route_to_delivery",
   "delivered",
 ];
+
+// Mirrors apps/api's lib/sos.ts SOS_ALLOWED_STATUSES — same window as chat.
+const SOS_ALLOWED_STATUSES: ErrandStatus[] = CHAT_ALLOWED_STATUSES;
 
 // Statuses where the runner has an errand in hand and should be
 // broadcasting position for the requester's live tracking map.
@@ -193,6 +197,10 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
           </>
         ) : null}
       </View>
+
+      {SOS_ALLOWED_STATUSES.includes(errand.status) && token ? (
+        <SosButton errandId={errand.id} token={token} apiBasePath="/runners/errands" otherPartyLabel="requester" />
+      ) : null}
 
       {step?.needsPin ? (
         <TextField

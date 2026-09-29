@@ -10,6 +10,8 @@ import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
 import { parseErrandFromText } from "../lib/ai";
 import { getAgoraJoinInfo } from "../lib/agora";
+import { triggerSos, getActiveSos, resolveSos } from "../lib/sos";
+import { triggerSosSchema } from "../schemas/sos";
 import type { Errand, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -274,6 +276,34 @@ router.post(
 
     const info = getAgoraJoinInfo(existing.id, req.requesterId!);
     res.json(info);
+  })
+);
+
+// SOS / panic button — see lib/sos.ts for what it does (and deliberately
+// doesn't do: it never alerts the runner). Runner equivalents live in
+// routes/runners.ts.
+router.post(
+  "/:id/sos",
+  asyncHandler(async (req, res) => {
+    const location = triggerSosSchema.parse(req.body);
+    const alert = await triggerSos({ errandId: req.params.id, role: "requester", userId: req.requesterId!, location });
+    res.status(201).json({ alert });
+  })
+);
+
+router.get(
+  "/:id/sos",
+  asyncHandler(async (req, res) => {
+    const alert = await getActiveSos(req.params.id, "requester", req.requesterId!);
+    res.json({ alert });
+  })
+);
+
+router.post(
+  "/:id/sos/resolve",
+  asyncHandler(async (req, res) => {
+    const alert = await resolveSos(req.params.id, "requester", req.requesterId!);
+    res.json({ alert });
   })
 );
 

@@ -30,6 +30,8 @@ import {
 } from "../lib/matching";
 import { resolveBankCode, resolveAccountNumber, createTransferRecipient, initiateTransfer } from "../lib/payments";
 import { getAgoraJoinInfo } from "../lib/agora";
+import { triggerSos, getActiveSos, resolveSos } from "../lib/sos";
+import { triggerSosSchema } from "../schemas/sos";
 import type { Errand, ErrandStatus, Runner, RunnerPayout, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -910,6 +912,38 @@ router.post(
 
     const info = getAgoraJoinInfo(existing.id, req.runnerId!);
     res.json(info);
+  })
+);
+
+// SOS / panic button — see lib/sos.ts. Requester equivalents live in
+// routes/errands.ts. Uses lib/sos.ts's own party check rather than
+// loadOwnActiveErrand, since an SOS should still work on a just-delivered
+// errand (incidents happen at hand-off).
+router.post(
+  "/errands/:id/sos",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const location = triggerSosSchema.parse(req.body);
+    const alert = await triggerSos({ errandId: parseErrandId(req.params.id), role: "runner", userId: req.runnerId!, location });
+    res.status(201).json({ alert });
+  })
+);
+
+router.get(
+  "/errands/:id/sos",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const alert = await getActiveSos(parseErrandId(req.params.id), "runner", req.runnerId!);
+    res.json({ alert });
+  })
+);
+
+router.post(
+  "/errands/:id/sos/resolve",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const alert = await resolveSos(parseErrandId(req.params.id), "runner", req.runnerId!);
+    res.json({ alert });
   })
 );
 

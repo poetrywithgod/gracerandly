@@ -6,6 +6,7 @@ import { getTheme } from "@gracerandly/theme";
 import type { Errand, ErrandStatus } from "@gracerandly/shared-types";
 import { KeyRound } from "lucide-react-native";
 import Button from "../components/Button";
+import SosButton from "../components/SosButton";
 import LoadingScreen from "../components/LoadingScreen";
 import ErrandPostedModal from "../components/ErrandPostedModal";
 import LiveTrackingMap from "../components/LiveTrackingMap";
@@ -202,6 +203,10 @@ export default function ErrandDetailScreen() {
           variant="secondary"
           onPress={() => navigation.navigate("Chat", { errandId: errand.id })}
         />
+      ) : null}
+
+      {CHAT_ALLOWED_STATUSES.has(errand.status) && token ? (
+        <SosButton errandId={errand.id} token={token} apiBasePath="/errands" otherPartyLabel="runner" />
       ) : null}
 
       <Text style={styles.category}>{CATEGORY_LABELS[errand.category]}</Text>

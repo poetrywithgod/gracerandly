@@ -9,6 +9,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import type { ErrandItem, GeoPoint, Guarantor, RunnerLocation } from "@gracerandly/shared-types";
 
 // Mirrors packages/shared-types' Gender union.
@@ -405,3 +406,49 @@ export const chatMessages = pgTable("chat_messages", {
 
 export type ChatMessageRow = typeof chatMessages.$inferSelect;
 export type NewChatMessageRow = typeof chatMessages.$inferInsert;
+
+// Mirrors packages/shared-types' SosStatus union.
+export const sosAlertStatusEnum = pgEnum("sos_alert_status", ["active", "resolved"]);
+
+// Who pressed the button. Its own enum rather than reusing
+// chatSenderRoleEnum — same two values today, but unrelated concepts.
+export const sosTriggeredByEnum = pgEnum("sos_triggered_by", ["requester", "runner"]);
+
+// Mirrors packages/shared-types' SosAlert interface.
+//
+// triggeredById isn't a foreign key for the same polymorphic reason as
+// chatMessages.senderId — it can point at requesters.id or runners.id
+// depending on triggeredByRole, so lib/sos.ts validates it in code.
+//
+// The partial unique index guarantees at most ONE active alert per
+// (errand, person who triggered it) even if two requests race — a second
+// press updates the existing alert's location instead of stacking rows
+// (and re-texting the safety team each time).
+export const sosAlerts = pgTable(
+  "sos_alerts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    errandId: uuid("errand_id")
+      .notNull()
+      .references(() => errands.id),
+    triggeredByRole: sosTriggeredByEnum("triggered_by_role").notNull(),
+    triggeredById: uuid("triggered_by_id").notNull(),
+    location: jsonb("location").$type<{ lat: number; lng: number }>().notNull(),
+    status: sosAlertStatusEnum("status").notNull().default("active"),
+    notifiedCount: integer("notified_count").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("sos_alerts_one_active_per_person_idx")
+      .on(table.errandId, table.triggeredByRole)
+      .where(sql`${table.status} = 'active'`),
+  ]
+);
+
+export type SosAlertRow = typeof sosAlerts.$inferSelect;
+export type NewSosAlertRow = typeof sosAlerts.$inferInsert;
