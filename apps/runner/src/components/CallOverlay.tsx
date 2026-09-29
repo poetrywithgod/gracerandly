@@ -1,17 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator } from "react-native";
-import {
-  createAgoraRtcEngine,
-  ChannelProfileType,
-  ClientRoleType,
-  RtcSurfaceView,
-  type IRtcEngine,
-} from "react-native-agora";
+import type { IRtcEngine } from "react-native-agora";
 import { requestRecordingPermissionsAsync } from "expo-audio";
 import * as ImagePicker from "expo-image-picker";
 import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, SwitchCamera } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import Avatar from "./Avatar";
+import { loadAgora } from "../lib/agora";
 import { fetchAgoraJoinInfo, type ChatParticipant } from "../lib/chatApi";
 import type { CallMode, CallState, ChatRole } from "../lib/chatSocket";
 
@@ -75,12 +70,17 @@ export default function CallOverlay({
           if (!cam.granted) throw new Error("Camera permission is needed for video calls");
         }
 
+        // Loaded here, not at the top of the file — see lib/agora.ts for
+        // why a missing native module must not crash the app at startup.
+        const agora = loadAgora();
+        if (!agora) throw new Error("Calling isn't available in this build of the app");
+
         const info = await fetchAgoraJoinInfo(role, errandId, authToken);
         if (cancelled) return;
 
-        const engine = createAgoraRtcEngine();
+        const engine = agora.createAgoraRtcEngine();
         engineRef.current = engine;
-        engine.initialize({ appId: info.appId, channelProfile: ChannelProfileType.ChannelProfileCommunication });
+        engine.initialize({ appId: info.appId, channelProfile: agora.ChannelProfileType.ChannelProfileCommunication });
         engine.registerEventHandler({
           onJoinChannelSuccess: () => setJoined(true),
           onUserJoined: (_connection, uid) => setRemoteUid(uid),
@@ -100,7 +100,7 @@ export default function CallOverlay({
           engine.startPreview();
         }
         engine.joinChannelWithUserAccount(info.token, info.channelName, info.uid, {
-          clientRoleType: ClientRoleType.ClientRoleBroadcaster,
+          clientRoleType: agora.ClientRoleType.ClientRoleBroadcaster,
           publishMicrophoneTrack: true,
           publishCameraTrack: isVideo,
           autoSubscribeAudio: true,
@@ -143,13 +143,17 @@ export default function CallOverlay({
 
   if (callState === "idle") return null;
 
+  // Only resolved once a call UI is actually showing; null if the native
+  // module is missing (the join effect above reports that to the user).
+  const RtcSurfaceView = loadAgora()?.RtcSurfaceView;
+
   return (
     <Modal visible animationType="slide" statusBarTranslucent>
       <View style={styles.container}>
-        {callState === "active" && isVideo && remoteUid !== null ? (
+        {RtcSurfaceView && callState === "active" && isVideo && remoteUid !== null ? (
           <RtcSurfaceView style={StyleSheet.absoluteFill} canvas={{ uid: remoteUid }} />
         ) : null}
-        {callState === "active" && isVideo && joined && !cameraOff ? (
+        {RtcSurfaceView && callState === "active" && isVideo && joined && !cameraOff ? (
           <RtcSurfaceView style={styles.localVideo} canvas={{ uid: 0 }} zOrderMediaOverlay />
         ) : null}
 

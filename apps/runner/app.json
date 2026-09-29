@@ -23,10 +23,17 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "RECORD_AUDIO",
-        "CAMERA",
-        "MODIFY_AUDIO_SETTINGS"
-      ]
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ],
+      "package": "com.anonymous.gracerandlyrunner"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -55,6 +62,11 @@
           "microphonePermission": "Gracerandly uses your microphone for voice notes and calls."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "315b9c55-0ef3-4916-a691-72a71707c3cc"
+      }
+    }
   }
 }
