@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator } from "react-native";
 import type { IRtcEngine } from "react-native-agora";
-import { requestRecordingPermissionsAsync } from "expo-audio";
-import * as ImagePicker from "expo-image-picker";
 import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, SwitchCamera } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import Avatar from "./Avatar";
 import { loadAgora } from "../lib/agora";
+import { ensurePermission } from "../lib/permissions";
 import { fetchAgoraJoinInfo, type ChatParticipant } from "../lib/chatApi";
 import type { CallMode, CallState, ChatRole } from "../lib/chatSocket";
 
@@ -63,11 +62,11 @@ export default function CallOverlay({
 
     async function join() {
       try {
-        const mic = await requestRecordingPermissionsAsync();
-        if (!mic.granted) throw new Error("Microphone permission is needed for calls");
-        if (isVideo) {
-          const cam = await ImagePicker.requestCameraPermissionsAsync();
-          if (!cam.granted) throw new Error("Camera permission is needed for video calls");
+        if ((await ensurePermission("microphone")) !== "granted") {
+          throw new Error("Microphone permission is needed for calls");
+        }
+        if (isVideo && (await ensurePermission("camera")) !== "granted") {
+          throw new Error("Camera permission is needed for video calls");
         }
 
         // Loaded here, not at the top of the file — see lib/agora.ts for

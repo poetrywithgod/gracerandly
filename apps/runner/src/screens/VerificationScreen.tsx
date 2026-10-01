@@ -3,8 +3,8 @@
 // signing in, it's a form the runner fills in from Settings whenever
 // they're ready. See routes/runners.ts's PATCH /me/verification and its
 // "self-serve auto-verify for now" comment for what happens server-side.
-import { useCallback, useMemo, useState } from "react";
-import { View, Text, StyleSheet, ScrollView } from "react-native";
+import { useCallback, useRef, useState } from "react";
+import { View, Text, StyleSheet, ScrollView, type LayoutChangeEvent } from "react-native";
 import { ShieldCheck } from "lucide-react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
@@ -18,50 +18,124 @@ const theme = getTheme("light");
 
 type Props = NativeStackScreenProps<MainStackParamList, "Verification">;
 
+type FieldKey = "nin" | "bvn" | "guarantorName" | "guarantorPhone" | "guarantorRelationship";
+type FieldErrors = Partial<Record<FieldKey, string>>;
+
+// Top-to-bottom, so "first error" means the one highest on the screen.
+const FIELD_ORDER: FieldKey[] = ["nin", "bvn", "guarantorName", "guarantorPhone", "guarantorRelationship"];
+
+// Server-side path -> the input it belongs to (see errorHandler's `fields`).
+const SERVER_FIELD_MAP: Record<string, FieldKey> = {
+  nin: "nin",
+  bvn: "bvn",
+  "guarantor.fullName": "guarantorName",
+  "guarantor.phone": "guarantorPhone",
+  "guarantor.relationship": "guarantorRelationship",
+};
+
+// People type Nigerian numbers the way they dial them (08012345678). Accept
+// that, plus 234… and +234…, and send the server the +234 form it expects.
+// Anything else is returned as typed so validation can reject it.
+function normalizeNigerianPhone(value: string): string {
+  const compact = value.replace(/[\s-]/g, "");
+  if (/^0\d{10}$/.test(compact)) return `+234${compact.slice(1)}`;
+  if (/^234\d{10}$/.test(compact)) return `+${compact}`;
+  return compact;
+}
+
+// NIN/BVN are only format-checked (11 digits) — nothing is verified against
+// NIMC or a bank yet, so placeholder numbers are fine while testing.
+function validate(values: Record<FieldKey, string>): FieldErrors {
+  const errors: FieldErrors = {};
+  if (!/^\d{11}$/.test(values.nin.trim())) errors.nin = "NIN must be exactly 11 digits";
+  if (!/^\d{11}$/.test(values.bvn.trim())) errors.bvn = "BVN must be exactly 11 digits";
+  if (values.guarantorName.trim().length < 2) errors.guarantorName = "Enter your guarantor's full name";
+  if (!/^\+[0-9]{7,15}$/.test(normalizeNigerianPhone(values.guarantorPhone))) {
+    errors.guarantorPhone = "Enter a valid phone number, e.g. 08012345678";
+  }
+  if (values.guarantorRelationship.trim().length < 2) {
+    errors.guarantorRelationship = "Say how this person knows you, e.g. Mom or Former employer";
+  }
+  return errors;
+}
+
 export default function VerificationScreen({ navigation }: Props) {
   const { user, submitVerification, isLoading } = useAuth();
 
-  const [nin, setNin] = useState("");
-  const [bvn, setBvn] = useState("");
-  const [guarantorName, setGuarantorName] = useState("");
-  const [guarantorPhone, setGuarantorPhone] = useState("");
-  const [guarantorRelationship, setGuarantorRelationship] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  const [values, setValues] = useState<Record<FieldKey, string>>({
+    nin: "",
+    bvn: "",
+    guarantorName: "",
+    guarantorPhone: "",
+    guarantorRelationship: "",
+  });
+  const [errors, setErrors] = useState<FieldErrors>({});
+  // Only start showing errors after the first submit attempt, so a field
+  // isn't shouted at while the person is still typing it for the first time.
+  const [hasTriedSubmit, setHasTriedSubmit] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const canSubmit = useMemo(
-    () =>
-      /^\d{11}$/.test(nin) &&
-      /^\d{11}$/.test(bvn) &&
-      guarantorName.trim().length > 1 &&
-      /^\+[0-9]{7,15}$/.test(guarantorPhone) &&
-      guarantorRelationship.trim().length > 1 &&
-      !isLoading,
-    [nin, bvn, guarantorName, guarantorPhone, guarantorRelationship, isLoading]
-  );
+  const scrollRef = useRef<ScrollView>(null);
+  const fieldY = useRef<Partial<Record<FieldKey, number>>>({});
+
+  const trackLayout = (key: FieldKey) => (event: LayoutChangeEvent) => {
+    fieldY.current[key] = event.nativeEvent.layout.y;
+  };
+
+  function scrollToFirstError(errs: FieldErrors) {
+    const first = FIELD_ORDER.find((key) => errs[key]);
+    const y = first ? fieldY.current[first] : undefined;
+    if (y !== undefined) scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true });
+  }
+
+  function setValue(key: FieldKey, next: string) {
+    const updated = { ...values, [key]: next };
+    setValues(updated);
+    setFormError(null);
+    // Once the person has tried to submit, re-check live so the red clears
+    // the moment a field becomes valid.
+    if (hasTriedSubmit) setErrors(validate(updated));
+  }
 
   const handleSubmit = useCallback(async () => {
-    setSubmitted(true);
+    setHasTriedSubmit(true);
     setFormError(null);
-    if (!canSubmit) {
-      setFormError("Fill in every field correctly, including your guarantor's details");
+
+    const found = validate(values);
+    setErrors(found);
+    if (Object.keys(found).length > 0) {
+      scrollToFirstError(found);
       return;
     }
+
     try {
       await submitVerification({
-        nin,
-        bvn,
+        nin: values.nin.trim(),
+        bvn: values.bvn.trim(),
         guarantor: {
-          fullName: guarantorName.trim(),
-          phone: guarantorPhone,
-          relationship: guarantorRelationship.trim(),
+          fullName: values.guarantorName.trim(),
+          phone: normalizeNigerianPhone(values.guarantorPhone),
+          relationship: values.guarantorRelationship.trim(),
         },
       });
       navigation.goBack();
     } catch (err) {
+      if (err instanceof ApiError && err.fields) {
+        // The server disagreed with the form — point at the exact inputs.
+        const mapped: FieldErrors = {};
+        for (const [path, message] of Object.entries(err.fields)) {
+          const key = SERVER_FIELD_MAP[path];
+          if (key && !mapped[key]) mapped[key] = message;
+        }
+        if (Object.keys(mapped).length > 0) {
+          setErrors(mapped);
+          scrollToFirstError(mapped);
+          return;
+        }
+      }
       setFormError(err instanceof ApiError ? err.message : "Couldn't submit verification");
     }
-  }, [canSubmit, submitVerification, nin, bvn, guarantorName, guarantorPhone, guarantorRelationship, navigation]);
+  }, [values, submitVerification, navigation]);
 
   if (user?.identityVerified) {
     return (
@@ -76,53 +150,72 @@ export default function VerificationScreen({ navigation }: Props) {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      ref={scrollRef}
+      contentContainerStyle={styles.container}
+      keyboardShouldPersistTaps="handled"
+    >
       <Text style={styles.intro}>
         We verify every runner's identity before they can go online or accept errands. This only
         takes a minute.
       </Text>
 
       <Text style={styles.sectionLabel}>Identity verification</Text>
-      <TextField
-        label="NIN"
-        value={nin}
-        onChangeText={setNin}
-        placeholder="11-digit National ID number"
-        keyboardType="number-pad"
-        maxLength={11}
-      />
-      <TextField
-        label="BVN"
-        value={bvn}
-        onChangeText={setBvn}
-        placeholder="11-digit Bank Verification Number"
-        keyboardType="number-pad"
-        maxLength={11}
-      />
+      <View onLayout={trackLayout("nin")}>
+        <TextField
+          label="NIN"
+          value={values.nin}
+          onChangeText={(t) => setValue("nin", t.replace(/\D/g, ""))}
+          placeholder="11-digit National ID number"
+          keyboardType="number-pad"
+          maxLength={11}
+          error={errors.nin}
+        />
+      </View>
+      <View onLayout={trackLayout("bvn")}>
+        <TextField
+          label="BVN"
+          value={values.bvn}
+          onChangeText={(t) => setValue("bvn", t.replace(/\D/g, ""))}
+          placeholder="11-digit Bank Verification Number"
+          keyboardType="number-pad"
+          maxLength={11}
+          error={errors.bvn}
+        />
+      </View>
 
       <Text style={styles.sectionLabel}>Guarantor</Text>
-      <TextField
-        label="Guarantor's full name"
-        value={guarantorName}
-        onChangeText={setGuarantorName}
-        placeholder="Someone who can vouch for you"
-      />
-      <TextField
-        label="Guarantor's phone number"
-        value={guarantorPhone}
-        onChangeText={setGuarantorPhone}
-        placeholder="+2348012345678"
-        keyboardType="phone-pad"
-        autoCapitalize="none"
-      />
-      <TextField
-        label="Relationship to you"
-        value={guarantorRelationship}
-        onChangeText={setGuarantorRelationship}
-        placeholder="e.g. Uncle, Former employer"
-      />
+      <View onLayout={trackLayout("guarantorName")}>
+        <TextField
+          label="Guarantor's full name"
+          value={values.guarantorName}
+          onChangeText={(t) => setValue("guarantorName", t)}
+          placeholder="Someone who can vouch for you"
+          error={errors.guarantorName}
+        />
+      </View>
+      <View onLayout={trackLayout("guarantorPhone")}>
+        <TextField
+          label="Guarantor's phone number"
+          value={values.guarantorPhone}
+          onChangeText={(t) => setValue("guarantorPhone", t)}
+          placeholder="08012345678"
+          keyboardType="phone-pad"
+          autoCapitalize="none"
+          error={errors.guarantorPhone}
+        />
+      </View>
+      <View onLayout={trackLayout("guarantorRelationship")}>
+        <TextField
+          label="Relationship to you"
+          value={values.guarantorRelationship}
+          onChangeText={(t) => setValue("guarantorRelationship", t)}
+          placeholder="e.g. Uncle, Former employer"
+          error={errors.guarantorRelationship}
+        />
+      </View>
 
-      {submitted && formError ? <Text style={styles.formError}>{formError}</Text> : null}
+      {formError ? <Text style={styles.formError}>{formError}</Text> : null}
 
       <Button
         label={isLoading ? "Submitting…" : "Submit for verification"}

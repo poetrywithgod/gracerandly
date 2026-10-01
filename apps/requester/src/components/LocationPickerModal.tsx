@@ -12,11 +12,16 @@ import {
   Platform,
 } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
-import { MapPin, Search, X } from "lucide-react-native";
+import { LocateFixed, MapPin, Search, X } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { GeoPoint } from "@gracerandly/shared-types";
 import Button from "./Button";
-import { getCurrentCoordinate, reverseGeocode, LocationPermissionDeniedError } from "../lib/location";
+import {
+  getCurrentCoordinate,
+  reverseGeocode,
+  LocationPermissionDeniedError,
+  LocationUnavailableError,
+} from "../lib/location";
 import { searchAddress, type PlaceSuggestion } from "../lib/routing";
 import { LEAFLET_JS, LEAFLET_CSS } from "../lib/leafletAssets";
 
@@ -66,14 +71,46 @@ function buildMapHtml(center: Coordinate, zoom: number): string {
   <script>
     window.map = L.map('map', { zoomControl: false }).setView([${center.latitude}, ${center.longitude}], ${zoom});
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    var tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(window.map);
+    });
+    tiles.addTo(window.map);
 
     function post(type, payload) {
       window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({ type: type }, payload || {})));
     }
+
+    // Blue "you are here" dot, updated from the app via setMe().
+    var meMarker = null;
+    var meRing = null;
+    window.setMe = function (lat, lng) {
+      if (meMarker) { meMarker.setLatLng([lat, lng]); meRing.setLatLng([lat, lng]); return; }
+      meRing = L.circle([lat, lng], { radius: 40, color: '#3b82f6', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.12, interactive: false }).addTo(window.map);
+      meMarker = L.marker([lat, lng], {
+        interactive: false,
+        icon: L.divIcon({
+          className: '',
+          html: '<div style="background:#3b82f6;width:16px;height:16px;border-radius:8px;border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.2),0 1px 4px rgba(0,0,0,0.4);"></div>',
+          iconSize: [16, 16],
+          iconAnchor: [8, 8]
+        })
+      }).addTo(window.map);
+    };
+
+    // Tapping the map moves the pin there (the pin sits at the map centre).
+    window.map.on('click', function (e) {
+      window.map.panTo(e.latlng);
+    });
+
+    // Tell the app if map tiles can't be fetched, instead of showing a
+    // silently blank grey map.
+    var tileErrors = 0;
+    tiles.on('tileerror', function () {
+      tileErrors += 1;
+      if (tileErrors === 4) post('tileError');
+    });
+    tiles.on('tileload', function () { tileErrors = 0; post('tilesOk'); });
 
     window.map.on('moveend', function () {
       var c = window.map.getCenter();
@@ -109,6 +146,11 @@ export default function LocationPickerModal({
   const [isResolvingAddress, setIsResolvingAddress] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [tilesFailed, setTilesFailed] = useState(false);
+  // Ignore address lookups that finish after a newer one was started —
+  // otherwise a slow answer for an old pin position overwrites the current one.
+  const addressRequestId = useRef(0);
+  const addressDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
@@ -123,11 +165,25 @@ export default function LocationPickerModal({
     );
   }, []);
 
-  const resolveAddressFor = useCallback(async (latitude: number, longitude: number) => {
+  const showMyLocation = useCallback((coordinate: Coordinate) => {
+    webviewRef.current?.injectJavaScript(
+      `if (window.setMe) { window.setMe(${coordinate.latitude}, ${coordinate.longitude}); }
+       true;`
+    );
+  }, []);
+
+  const resolveAddressFor = useCallback((latitude: number, longitude: number) => {
+    // Wait for the pin to settle (a drag fires several moves), then look up
+    // the address; only the newest lookup is allowed to update the screen.
+    if (addressDebounce.current) clearTimeout(addressDebounce.current);
+    const requestId = ++addressRequestId.current;
     setIsResolvingAddress(true);
-    const resolved = await reverseGeocode({ latitude, longitude });
-    setAddress(resolved);
-    setIsResolvingAddress(false);
+    addressDebounce.current = setTimeout(async () => {
+      const resolved = await reverseGeocode({ latitude, longitude });
+      if (requestId !== addressRequestId.current) return;
+      setAddress(resolved);
+      setIsResolvingAddress(false);
+    }, 450);
   }, []);
 
   // This picker is one shared instance reused for both the pickup and
@@ -157,11 +213,12 @@ export default function LocationPickerModal({
     try {
       const coordinate = await getCurrentCoordinate();
       setRegion(coordinate);
+      showMyLocation(coordinate);
       recenterMap(coordinate);
       resolveAddressFor(coordinate.latitude, coordinate.longitude);
     } catch (err) {
       setLocationError(
-        err instanceof LocationPermissionDeniedError
+        err instanceof LocationPermissionDeniedError || err instanceof LocationUnavailableError
           ? err.message
           : "Couldn't get your current location. Drop a pin manually instead."
       );
@@ -239,6 +296,10 @@ export default function LocationPickerModal({
 
       if (message.type === "ready") {
         setIsMapReady(true);
+      } else if (message.type === "tileError") {
+        setTilesFailed(true);
+      } else if (message.type === "tilesOk") {
+        setTilesFailed(false);
       } else if (
         message.type === "regionChange" &&
         typeof message.lat === "number" &&
@@ -311,6 +372,26 @@ export default function LocationPickerModal({
           <View style={styles.centerPin} pointerEvents="none">
             <MapPin size={36} color={theme.colors.primary} fill={theme.colors.accent} />
           </View>
+
+          {tilesFailed ? (
+            <View style={styles.tileWarning} pointerEvents="none">
+              <Text style={styles.tileWarningText}>Map images aren't loading. Check your internet connection.</Text>
+            </View>
+          ) : null}
+
+          <Pressable
+            style={styles.locateButton}
+            onPress={handleUseCurrentLocation}
+            disabled={isLocating}
+            accessibilityRole="button"
+            accessibilityLabel="Go to my current location"
+          >
+            {isLocating ? (
+              <ActivityIndicator size="small" color={theme.colors.primary} />
+            ) : (
+              <LocateFixed size={22} color={theme.colors.primary} />
+            )}
+          </Pressable>
         </View>
 
         <View style={styles.bottomSheet}>
@@ -320,14 +401,6 @@ export default function LocationPickerModal({
               : address ?? `${region.latitude.toFixed(5)}, ${region.longitude.toFixed(5)}`}
           </Text>
           {locationError ? <Text style={styles.errorText}>{locationError}</Text> : null}
-
-          <Button
-            label="Use current location"
-            variant="ghost"
-            onPress={handleUseCurrentLocation}
-            loading={isLocating}
-            style={styles.currentLocationButton}
-          />
 
           <Button label={`Confirm ${title.toLowerCase()}`} onPress={handleConfirm} />
         </View>
@@ -447,8 +520,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: theme.colors.danger,
   },
-  currentLocationButton: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 0,
+  locateButton: {
+    position: "absolute",
+    right: theme.spacing.md,
+    bottom: theme.spacing.md,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: theme.colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
   },
+  tileWarning: {
+    position: "absolute",
+    left: theme.spacing.md,
+    right: 80,
+    bottom: theme.spacing.md,
+    backgroundColor: "rgba(26,16,19,0.85)",
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.sm,
+  },
+  tileWarningText: { fontFamily: theme.fonts.ui, fontSize: 12, color: "#fff" },
 });

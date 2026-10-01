@@ -11,9 +11,23 @@ const phoneSchema = z.string().regex(/^\+[0-9]{7,15}$/, "Enter a valid phone num
 const ninSchema = z.string().regex(/^\d{11}$/, "NIN must be 11 digits");
 const bvnSchema = z.string().regex(/^\d{11}$/, "BVN must be 11 digits");
 
+// People type Nigerian numbers the way they dial them (08012345678), not in
+// +234 form. Normalise the common local shapes to international format
+// before the strict phoneSchema check, so a perfectly good number isn't
+// rejected just for how it was typed. Anything else is passed through
+// unchanged and left for phoneSchema to judge.
+function normalizeNigerianPhone(value: string): string {
+  const compact = value.replace(/[\s-]/g, "");
+  if (/^0\d{10}$/.test(compact)) return `+234${compact.slice(1)}`;
+  if (/^234\d{10}$/.test(compact)) return `+${compact}`;
+  return compact;
+}
+
+const guarantorPhoneSchema = z.string().transform(normalizeNigerianPhone).pipe(phoneSchema);
+
 const guarantorSchema = z.object({
   fullName: z.string().trim().min(2, "Guarantor's full name is required"),
-  phone: phoneSchema,
+  phone: guarantorPhoneSchema,
   relationship: z.string().trim().min(2, "How this person knows you is required"),
 });
 

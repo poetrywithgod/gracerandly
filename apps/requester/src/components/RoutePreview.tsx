@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, ActivityIndicator } from "react-native";
 import { WebView } from "react-native-webview";
-import { Bike, Car, Footprints, TrainFront, type LucideIcon } from "lucide-react-native";
+import { Bike, Car, Footprints, Motorbike, TrainFront, type LucideIcon } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { GeoPoint } from "@gracerandly/shared-types";
 import { LEAFLET_JS, LEAFLET_CSS } from "../lib/leafletAssets";
@@ -79,7 +79,8 @@ function buildRouteHtml(
 
 const MODE_META: Record<TravelMode, { label: string; Icon: LucideIcon }> = {
   foot: { label: "Walk", Icon: Footprints },
-  motorcycle: { label: "Okada", Icon: Bike },
+  bicycle: { label: "Bicycle", Icon: Bike },
+  motorcycle: { label: "Okada", Icon: Motorbike },
   car: { label: "Car", Icon: Car },
   train: { label: "Train", Icon: TrainFront },
 };
@@ -157,7 +158,9 @@ export default function RoutePreview({ pickup, dropoff }: RoutePreviewProps) {
         ))}
       </View>
 
-      <Text style={styles.trainNote}>Train isn't available as an option here yet.</Text>
+      <Text style={styles.trainNote}>
+        Times are estimates for typical city traffic. Train isn't available as an option here yet.
+      </Text>
     </View>
   );
 }

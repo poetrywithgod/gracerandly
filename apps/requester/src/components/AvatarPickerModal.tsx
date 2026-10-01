@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Modal, View, Text, Pressable, StyleSheet, Platform } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import { ensurePermission } from "../lib/permissions";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { Camera, Image as ImageIcon, Trash2, X } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
@@ -42,9 +43,9 @@ export default function AvatarPickerModal({
 
   async function handlePickFromLibrary() {
     setError(null);
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      setError("Allow photo library access in your device settings to choose a picture.");
+    const outcome = await ensurePermission("photos");
+    if (outcome !== "granted") {
+      if (outcome === "denied") setError("Photo access is needed to choose a picture.");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -59,9 +60,9 @@ export default function AvatarPickerModal({
 
   async function handleTakePhoto() {
     setError(null);
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      setError("Allow camera access in your device settings to take a picture.");
+    const outcome = await ensurePermission("camera");
+    if (outcome !== "granted") {
+      if (outcome === "denied") setError("Camera access is needed to take a picture.");
       return;
     }
     const result = await ImagePicker.launchCameraAsync({

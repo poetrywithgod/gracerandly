@@ -11,7 +11,8 @@ import {
   Alert,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
+import { useAudioRecorder, RecordingPresets, setAudioModeAsync } from "expo-audio";
+import { ensurePermission } from "../lib/permissions";
 import * as FileSystem from "expo-file-system/legacy";
 import { Phone, Video, Mic, Send, X, Check } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
@@ -117,11 +118,9 @@ export default function ChatScreen({ route, navigation }: Props) {
   }
 
   async function startRecording() {
-    const permission = await requestRecordingPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert("Microphone needed", "Allow microphone access to send voice notes.");
-      return;
-    }
+    // Branded explainer first, then the OS dialog (see lib/permissions.ts);
+    // if they decline, the card itself has already told them what to do.
+    if ((await ensurePermission("microphone")) !== "granted") return;
     await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
     await recorder.prepareToRecordAsync();
     recorder.record();

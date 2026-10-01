@@ -27,18 +27,22 @@ function resolveApiBaseUrl(): string {
 export const API_BASE_URL = resolveApiBaseUrl();
 
 interface ApiErrorBody {
-  error?: { code?: string; message?: string };
+  error?: { code?: string; message?: string; fields?: Record<string, string> };
 }
 
 export class ApiError extends Error {
   status: number;
   code?: string;
+  /** Per-field validation messages keyed by dotted path (e.g.
+   * "guarantor.phone"), present on 400 validation errors. */
+  fields?: Record<string, string>;
 
-  constructor(status: number, message: string, code?: string) {
+  constructor(status: number, message: string, code?: string, fields?: Record<string, string>) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.fields = fields;
   }
 }
 
@@ -64,7 +68,8 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     throw new ApiError(
       response.status,
       errorBody?.error?.message ?? `Request failed with status ${response.status}`,
-      errorBody?.error?.code
+      errorBody?.error?.code,
+      errorBody?.error?.fields
     );
   }
 

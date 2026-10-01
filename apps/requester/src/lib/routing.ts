@@ -16,7 +16,19 @@
 import type { Coordinate } from "./location";
 
 const NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
-const OSRM_BASE = "https://router.project-osrm.org";
+// router.project-osrm.org (the public OSRM demo) only serves the CAR
+// profile: a "/route/v1/foot/..." request to it silently returns a driving
+// route, which is why walking times used to match driving times. The
+// routing.openstreetmap.de instances run one OSRM per profile (car, bike,
+// foot), so each mode gets its own real route. Their URLs always use
+// "driving" as the profile segment — the server itself picks the profile.
+const ROUTE_SERVERS = {
+  car: "https://routing.openstreetmap.de/routed-car",
+  bike: "https://routing.openstreetmap.de/routed-bike",
+  foot: "https://routing.openstreetmap.de/routed-foot",
+} as const;
+const OSRM_DEMO_CAR = "https://router.project-osrm.org";
+const ROUTE_TIMEOUT_MS = 10_000;
 
 // Nominatim's usage policy requires a real identifying User-Agent on
 // every request — generic/default-UA traffic gets rate-limited harder
@@ -90,13 +102,16 @@ export async function searchAddress(
   }));
 }
 
-export type TravelMode = "foot" | "motorcycle" | "car" | "train";
+export type TravelMode = "foot" | "bicycle" | "motorcycle" | "car" | "train";
 
 export interface RouteEstimate {
   mode: TravelMode;
   available: boolean;
   distanceMeters?: number;
   durationSeconds?: number;
+  /** True when the time was worked out from the road distance and a typical
+   * speed instead of coming from a routing engine for this mode. */
+  estimated?: boolean;
 }
 
 export interface RouteResult {
@@ -112,25 +127,47 @@ export interface FastestRoute {
   estimates: RouteEstimate[];
 }
 
-// OSRM ships "car" (driving), "bike" and "foot" profiles — there's no
-// dedicated motorcycle profile, public or self-hosted. We approximate
-// motorcycle timing off the driving route: same roads, but okada riders
-// routinely thread through go-slow traffic a car can't, so real
-// point-to-point times run faster than a car's in Nigerian city traffic.
-// This multiplier is a rough, unvalidated estimate — replace it with a
-// real one once we have Runner GPS trip data to calibrate against.
-const MOTORCYCLE_DURATION_FACTOR = 0.65;
+// Routing engines give free-flow times: no traffic lights, no go-slows, no
+// market-day gridlock. Real Port Harcourt/Lagos-style city driving is
+// well slower, so car time is scaled up. Okada (motorcycle) riders filter
+// through the same congestion, so they're left at roughly free-flow. There
+// is no motorcycle profile in any public OSRM, so okada uses the car road
+// route. These two numbers are estimates, not measurements — tune them
+// against real Runner trip times once there is GPS trip data.
+const CAR_CONGESTION_FACTOR = 1.5;
+const MOTORCYCLE_CONGESTION_FACTOR = 1.0;
 
-async function fetchOsrmRoute(
+// Fallback average speeds (metres/second) used only when the foot or bike
+// routing server can't be reached, so a walking or cycling time is still
+// shown — marked `estimated` — instead of a blank chip.
+const WALK_SPEED_MPS = 1.25; // 4.5 km/h
+const BIKE_SPEED_MPS = 4.2; // 15 km/h
+
+// fetch() with a timeout (React Native's fetch has none of its own), still
+// honouring the caller's own AbortSignal.
+async function fetchWithTimeout(url: string, signal?: AbortSignal): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ROUTE_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener("abort", onAbort);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+async function fetchRoute(
+  baseUrl: string,
   from: Coordinate,
   to: Coordinate,
-  profile: "driving" | "foot",
   signal?: AbortSignal
 ): Promise<RouteResult> {
   const coords = `${from.longitude},${from.latitude};${to.longitude},${to.latitude}`;
-  const url = `${OSRM_BASE}/route/v1/${profile}/${coords}?overview=full&geometries=geojson`;
+  const url = `${baseUrl}/route/v1/driving/${coords}?overview=full&geometries=geojson`;
 
-  const response = await fetch(url, { signal });
+  const response = await fetchWithTimeout(url, signal);
   if (!response.ok) throw new Error(`Route lookup failed (${response.status})`);
 
   const data = (await response.json()) as {
@@ -154,9 +191,23 @@ async function fetchOsrmRoute(
   };
 }
 
+// Car route: the dedicated car server first, the OSRM demo as a backup.
+async function fetchCarRoute(from: Coordinate, to: Coordinate, signal?: AbortSignal): Promise<RouteResult> {
+  try {
+    return await fetchRoute(ROUTE_SERVERS.car, from, to, signal);
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError" && signal?.aborted) throw err;
+    return fetchRoute(OSRM_DEMO_CAR, from, to, signal);
+  }
+}
+
 /**
- * Fetches the fastest road route (for drawing on the map) plus
- * approximate travel times for foot, motorcycle, car and train.
+ * Fetches the fastest road route (for drawing on the map) plus travel times
+ * for walking, cycling, okada, car and train.
+ *
+ * Walking and cycling come from their own routing profiles (their own
+ * distance and time); okada and car share the road route with different
+ * congestion allowances (see the constants above).
  *
  * Train is always returned as `available: false`. None of the Nigerian
  * cities Gracerandly targets have a functioning point-to-point commuter
@@ -169,43 +220,69 @@ export async function getFastestRouteWithEstimates(
   to: Coordinate,
   signal?: AbortSignal
 ): Promise<FastestRoute> {
-  const [driving, walking] = await Promise.all([
-    fetchOsrmRoute(from, to, "driving", signal),
-    // Foot routing can legitimately fail to resolve more often than
-    // driving does (no footpath OSRM's foot profile will use) — don't
-    // let that take down the whole panel.
-    fetchOsrmRoute(from, to, "foot", signal).catch(() => null),
+  const car = await fetchCarRoute(from, to, signal);
+
+  // Foot/bike failing must never take down the whole panel — each one falls
+  // back to a distance-and-speed estimate off the car route.
+  const [foot, bike] = await Promise.all([
+    fetchRoute(ROUTE_SERVERS.foot, from, to, signal).catch(() => null),
+    fetchRoute(ROUTE_SERVERS.bike, from, to, signal).catch(() => null),
   ]);
 
   const estimates: RouteEstimate[] = [
-    { mode: "foot", available: !!walking, distanceMeters: walking?.distanceMeters, durationSeconds: walking?.durationSeconds },
+    foot
+      ? { mode: "foot", available: true, distanceMeters: foot.distanceMeters, durationSeconds: foot.durationSeconds }
+      : {
+          mode: "foot",
+          available: true,
+          distanceMeters: car.distanceMeters,
+          durationSeconds: car.distanceMeters / WALK_SPEED_MPS,
+          estimated: true,
+        },
+    bike
+      ? { mode: "bicycle", available: true, distanceMeters: bike.distanceMeters, durationSeconds: bike.durationSeconds }
+      : {
+          mode: "bicycle",
+          available: true,
+          distanceMeters: car.distanceMeters,
+          durationSeconds: car.distanceMeters / BIKE_SPEED_MPS,
+          estimated: true,
+        },
     {
       mode: "motorcycle",
       available: true,
-      distanceMeters: driving.distanceMeters,
-      durationSeconds: driving.durationSeconds * MOTORCYCLE_DURATION_FACTOR,
+      distanceMeters: car.distanceMeters,
+      durationSeconds: car.durationSeconds * MOTORCYCLE_CONGESTION_FACTOR,
+      estimated: true,
     },
-    { mode: "car", available: true, distanceMeters: driving.distanceMeters, durationSeconds: driving.durationSeconds },
+    {
+      mode: "car",
+      available: true,
+      distanceMeters: car.distanceMeters,
+      durationSeconds: car.durationSeconds * CAR_CONGESTION_FACTOR,
+      estimated: true,
+    },
     { mode: "train", available: false },
   ];
 
-  return { route: driving, estimates };
+  return { route: car, estimates };
 }
 
 /**
  * Lighter-weight than getFastestRouteWithEstimates: just the driving ETA
- * from one point to another, with no foot leg fetched alongside it.
+ * from one point to another, with no foot/bike legs fetched alongside it.
  * Built for LiveTrackingMap's periodic "distance/time to next waypoint"
- * recalculation, where firing two OSRM requests per tick would waste
- * budget against the public router's ~1 req/sec fair-use limit.
+ * recalculation, where firing several requests per tick would waste budget
+ * against the public routers' ~1 req/sec fair-use limit. Uses the same
+ * congestion allowance as the car time in the estimates, so the two agree.
  */
 export async function getEtaToPoint(
   from: Coordinate,
   to: Coordinate,
   signal?: AbortSignal
 ): Promise<{ distanceMeters: number; durationSeconds: number }> {
-  const route = await fetchOsrmRoute(from, to, "driving", signal);
-  return { distanceMeters: route.distanceMeters, durationSeconds: route.durationSeconds };
+  const route = await fetchCarRoute(from, to, signal);
+  return { distanceMeters: route.distanceMeters, durationSeconds: route.durationSeconds * CAR_CONGESTION_FACTOR };
 }
 
 export function formatDuration(seconds: number): string {
@@ -223,8 +300,8 @@ export function formatDistance(meters: number): string {
 }
 
 /*
- * Production note: nominatim.openstreetmap.org and
- * router.project-osrm.org are shared community demo servers — rate
+ * Production note: nominatim.openstreetmap.org, routing.openstreetmap.de and
+ * router.project-osrm.org are shared community servers — rate
  * limited (~1 req/sec), no uptime SLA, and their usage policies ask that
  * anything beyond light/dev traffic move to a self-hosted instance or a
  * paid provider (e.g. LocationIQ, Geoapify, or Mapbox for geocoding;

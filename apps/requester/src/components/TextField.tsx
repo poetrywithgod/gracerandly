@@ -13,7 +13,7 @@ export default function TextField({ label, error, style, ...rest }: TextFieldPro
     <View style={styles.wrapper}>
       <Text style={styles.label}>{label}</Text>
       <TextInput
-        style={[styles.input, rest.multiline && styles.multiline, style]}
+        style={[styles.input, rest.multiline && styles.multiline, !!error && styles.inputError, style]}
         placeholderTextColor={theme.colors.textMuted}
         selectionColor={theme.colors.primary}
         {...rest}
@@ -41,6 +41,10 @@ const styles = StyleSheet.create({
     fontFamily: theme.fonts.uiMedium,
     fontSize: 15,
     color: theme.colors.text,
+  },
+  inputError: {
+    borderColor: theme.colors.danger,
+    backgroundColor: "#FDF3F1",
   },
   multiline: {
     minHeight: 80,
