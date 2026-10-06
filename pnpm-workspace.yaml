@@ -6,3 +6,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - react-native-maps@1.29.8
   - '@anthropic-ai/sdk@0.128.0'
+  - expo-eas-client@57.0.5
+  - expo-updates@57.0.25
