@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "170954633769",
+    "project_id": "gracerandly",
+    "storage_bucket": "gracerandly.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:170954633769:android:c67eab2c049d9d5ebae238",
+        "android_client_info": {
+          "package_name": "com.anonymous.gracerandlyrunner"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAXzjwsswoqthU2uHQ2Cu1a9hmCu7LkAeE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:170954633769:android:9331e8f5d68702d4bae238",
+        "android_client_info": {
+          "package_name": "com.cyberscribe.gracerandlyrequester"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAXzjwsswoqthU2uHQ2Cu1a9hmCu7LkAeE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
