@@ -63,10 +63,17 @@ export async function requestVerificationCode(
     });
 
   const message = `${code} is your Gracerandly verification code. It expires in ${CODE_TTL_MINUTES} minutes.`;
-  if (channel === "phone") {
-    await smsProvider.send(destination, message);
-  } else {
-    await emailProvider.send(destination, "Verify your email", message);
+  try {
+    if (channel === "phone") {
+      await smsProvider.send(destination, message);
+    } else {
+      await emailProvider.send(destination, "Verify your email", message);
+    }
+  } catch (err) {
+    console.error(`[verification] failed to deliver ${channel} code`, err);
+    throw AppErrors.deliveryFailed(
+      `We couldn't send the code to that ${channel === "phone" ? "number" : "address"}. Please check it and try again.`
+    );
   }
 
   return EXPOSE_DEV_CODES ? { devCode: code } : {};

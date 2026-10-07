@@ -16,4 +16,5 @@ export const AppErrors = {
   conflict: (message: string) => new AppError(409, "conflict", message),
   notFound: (message = "Not found") => new AppError(404, "not_found", message),
   tooManyRequests: (message: string) => new AppError(429, "too_many_requests", message),
+  deliveryFailed: (message: string) => new AppError(502, "delivery_failed", message),
 };
