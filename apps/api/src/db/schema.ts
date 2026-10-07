@@ -452,3 +452,32 @@ export const sosAlerts = pgTable(
 
 export type SosAlertRow = typeof sosAlerts.$inferSelect;
 export type NewSosAlertRow = typeof sosAlerts.$inferInsert;
+
+// One row per device that can receive push notifications. `token` is the
+// Expo push token (ExponentPushToken[...]) the app registers after login.
+// Unique on the token itself: a token identifies a physical install, so if
+// a different person logs in on the same phone the row is re-pointed at
+// them (see routes/push.ts) rather than leaving the old account getting
+// the new account's messages.
+export const pushTokenRoleEnum = pgEnum("push_token_role", ["requester", "runner"]);
+
+export const pushTokens = pgTable(
+  "push_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userRole: pushTokenRoleEnum("user_role").notNull(),
+    userId: uuid("user_id").notNull(),
+    token: text("token").notNull(),
+    platform: text("platform").notNull().default("android"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("push_tokens_token_idx").on(table.token),
+  ]
+);
+
+export type PushTokenRow = typeof pushTokens.$inferSelect;

@@ -85,11 +85,13 @@
 import type { Server as HttpServer } from "node:http";
 import type { IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
+import type { RawData } from "ws";
 import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
-import { chatMessages, errands } from "../db/schema";
+import { chatMessages, errands, requesters, runners } from "../db/schema";
 import { verifyAuthToken } from "./jwt";
+import { sendPushToUser } from "./push";
 
 const CHAT_ALLOWED_STATUSES = new Set(["accepted", "en_route_to_pickup", "in_progress", "en_route_to_delivery", "delivered"]);
 
@@ -165,6 +167,56 @@ function send(ws: WebSocket, payload: unknown) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
 }
 
+/** Tells the other party about something that happened while they have no
+ * live connection (app closed or backgrounded). Best-effort: never throws
+ * and never delays the sender — callers fire it with `void`. */
+async function pushToOfflineRecipient(
+  conn: Connection,
+  kind: "message" | "call",
+  preview: { contentType?: "text" | "audio"; content?: string }
+) {
+  try {
+    const [errand] = await db.select().from(errands).where(eq(errands.id, conn.errandId)).limit(1);
+    if (!errand) return;
+    const recipientRole = otherRole(conn.role);
+    const recipientId = recipientRole === "requester" ? errand.requesterId : errand.runnerId;
+    if (!recipientId) return;
+
+    const [sender] =
+      conn.role === "requester"
+        ? await db.select({ fullName: requesters.fullName }).from(requesters).where(eq(requesters.id, conn.userId)).limit(1)
+        : await db.select({ fullName: runners.fullName }).from(runners).where(eq(runners.id, conn.userId)).limit(1);
+    const name = sender?.fullName?.trim().split(/\s+/)[0] || (conn.role === "runner" ? "Your runner" : "Your requester");
+
+    if (kind === "call") {
+      await sendPushToUser(recipientRole, recipientId, {
+        title: "Missed call",
+        body: `${name} tried to call you. Tap to open the chat.`,
+        data: { type: "call", errandId: conn.errandId },
+        channelId: "calls",
+        ttl: 3600,
+      });
+      return;
+    }
+
+    const body =
+      preview.contentType === "audio"
+        ? "Sent you a voice note"
+        : (preview.content ?? "").length > 140
+          ? `${(preview.content ?? "").slice(0, 137)}...`
+          : (preview.content ?? "");
+    await sendPushToUser(recipientRole, recipientId, {
+      title: name,
+      body,
+      data: { type: "message", errandId: conn.errandId },
+      channelId: "messages",
+      ttl: 86_400,
+    });
+  } catch (err) {
+    console.error("[push] couldn't notify offline recipient", err instanceof Error ? err.message : err);
+  }
+}
+
 function messagePayload(row: typeof chatMessages.$inferSelect) {
   return {
     type: "message" as const,
@@ -220,7 +272,12 @@ async function handleClientMessage(conn: Connection, raw: unknown) {
   if (data.type === "call-invite" || data.type === "call-accept" || data.type === "call-decline" || data.type === "call-end") {
     const recipient = recipientOf(conn);
     if (!recipient) {
-      if (data.type === "call-invite") send(conn.ws, { type: "call-unavailable" });
+      if (data.type === "call-invite") {
+        send(conn.ws, { type: "call-unavailable" });
+        // A live call can't ring a closed app, but a "missed call"
+        // notification at least tells them to open the chat.
+        void pushToOfflineRecipient(conn, "call", {});
+      }
       return;
     }
     send(recipient.ws, data.type === "call-invite" ? { ...data, fromRole: conn.role } : data);
@@ -247,7 +304,12 @@ async function handleClientMessage(conn: Connection, raw: unknown) {
   const recipient = recipientOf(conn);
   if (recipient) send(recipient.ws, messagePayload(row));
   // If the recipient isn't connected right now, the row just stays in
-  // chat_messages — flushQueuedMessages delivers it next time they join.
+  // chat_messages — flushQueuedMessages delivers it next time they join —
+  // and (for new messages, not edits) a push notification goes out so they
+  // know to open the app.
+  else if (data.type === "message") {
+    void pushToOfflineRecipient(conn, "message", { contentType: data.contentType ?? "text", content: data.content });
+  }
 }
 
 async function authenticateConnection(req: IncomingMessage): Promise<Connection | { error: string }> {
@@ -282,6 +344,18 @@ export function attachChatServer(server: HttpServer): void {
   const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 5 * 1024 * 1024 });
 
   wss.on("connection", async (ws, req) => {
+    // Authenticating and flushing the queue take a few DB round-trips. A
+    // client can legitimately send the moment the socket opens (e.g. right
+    // after tapping a push notification), so listen immediately and hold
+    // anything that arrives early, then replay it in order once joined —
+    // otherwise those first messages would be silently dropped.
+    const early: RawData[] = [];
+    let onMessage: ((raw: RawData) => void) | null = null;
+    ws.on("message", (raw) => {
+      if (onMessage) onMessage(raw);
+      else early.push(raw);
+    });
+
     const result = await authenticateConnection(req);
     if ("error" in result) {
       ws.close(4001, result.error);
@@ -292,7 +366,7 @@ export function attachChatServer(server: HttpServer): void {
     joinRoom(conn);
     await flushQueuedMessages(conn);
 
-    ws.on("message", (raw) => {
+    onMessage = (raw) => {
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw.toString());
@@ -303,7 +377,8 @@ export function attachChatServer(server: HttpServer): void {
       handleClientMessage(conn, parsed).catch(() => {
         send(ws, { type: "error", message: "Couldn't process that message" });
       });
-    });
+    };
+    for (const raw of early.splice(0)) onMessage(raw);
 
     ws.on("close", () => {
       leaveRoom(conn);

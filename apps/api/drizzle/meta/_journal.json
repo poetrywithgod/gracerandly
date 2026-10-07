@@ -92,6 +92,13 @@
       "when": 1790627717356,
       "tag": "0012_groovy_forge",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791402268990,
+      "tag": "0013_vengeful_manta",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import * as SecureStore from "expo-secure-store";
 import type { Runner, VehicleType } from "@gracerandly/shared-types";
 import { apiFetch, ApiError } from "../lib/apiClient";
+import { unregisterForPush } from "../lib/push";
 
 const TOKEN_STORAGE_KEY = "gracerandly_runner_auth_token";
 
@@ -160,10 +161,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    // Stop push notifications for this account on this phone (needs the
+    // token, so it must go out before the token is cleared below).
+    if (token) unregisterForPush(token);
     await SecureStore.deleteItemAsync(TOKEN_STORAGE_KEY);
     setToken(null);
     setUser(null);
-  }, []);
+  }, [token]);
 
   const refreshUser = useCallback(async () => {
     if (!token) return;

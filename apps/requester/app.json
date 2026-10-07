@@ -57,6 +57,12 @@
         {
           "microphonePermission": "Gracerandly uses your microphone for voice notes and calls."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#502D55"
+        }
       ]
     ],
     "extra": {

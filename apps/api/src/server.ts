@@ -10,6 +10,7 @@ import authRouter from "./routes/auth";
 import errandsRouter from "./routes/errands";
 import walletRouter from "./routes/wallet";
 import runnersRouter from "./routes/runners";
+import pushRouter from "./routes/push";
 import { errorHandler } from "./middleware/errorHandler";
 import { attachChatServer } from "./lib/chat-server";
 
@@ -56,6 +57,7 @@ app.use("/auth", authRouter);
 app.use("/errands", errandsRouter);
 app.use("/wallet", walletRouter);
 app.use("/runners", runnersRouter);
+app.use("/push", pushRouter);
 
 // Must be registered last — Express identifies error-handling middleware
 // by its four-argument signature.

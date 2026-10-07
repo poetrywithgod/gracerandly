@@ -14,9 +14,10 @@
 import { Linking } from "react-native";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
+import * as Notifications from "expo-notifications";
 import { getRecordingPermissionsAsync, requestRecordingPermissionsAsync } from "expo-audio";
 
-export type PermissionKind = "location" | "microphone" | "camera" | "photos";
+export type PermissionKind = "location" | "microphone" | "camera" | "photos" | "notifications";
 
 /** granted: go ahead. denied: they said no this time (can be asked again).
  * blocked: the OS won't ask again — only system Settings can change it. */
@@ -51,6 +52,10 @@ const handlers: Record<PermissionKind, { get: () => Promise<Status>; request: ()
   photos: {
     get: () => ImagePicker.getMediaLibraryPermissionsAsync(),
     request: () => ImagePicker.requestMediaLibraryPermissionsAsync(),
+  },
+  notifications: {
+    get: () => Notifications.getPermissionsAsync(),
+    request: () => Notifications.requestPermissionsAsync(),
   },
 };
 

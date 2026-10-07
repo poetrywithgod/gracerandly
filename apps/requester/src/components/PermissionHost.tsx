@@ -2,12 +2,12 @@
 // GlassCard.tsx's header comment for why it's duplicated.
 //
 // Renders lib/permissions.ts's prompts in the same card style as
-// ConfirmModal, so asking for location / microphone / camera / photos looks
+// ConfirmModal, so asking for location / microphone / camera / photos / notifications looks
 // like the rest of the app instead of a bare system dialog. Mount once,
 // near the root (App.tsx).
 import { useEffect, useState } from "react";
 import { Modal, View, Text, StyleSheet } from "react-native";
-import { Camera, Image as ImageIcon, MapPin, Mic, type LucideIcon } from "lucide-react-native";
+import { Bell, Camera, Image as ImageIcon, MapPin, Mic, type LucideIcon } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import Button from "./Button";
 import {
@@ -42,6 +42,12 @@ const COPY: Record<PermissionKind, { Icon: LucideIcon; title: string; why: strin
     title: "Allow photo access",
     why: "Gracerandly needs to see your photos so you can pick a profile picture. Nothing is shared until you choose one.",
     settingsHint: "Photo access is turned off for Gracerandly. Open Settings, then Permissions, then Photos, and choose Allow.",
+  },
+  notifications: {
+    Icon: Bell,
+    title: "Allow notifications",
+    why: "Gracerandly can alert you to new messages and missed calls about your errand, even when the app is closed.",
+    settingsHint: "Notifications are turned off for Gracerandly. Open Settings, then Notifications, and choose Allow.",
   },
 };
 

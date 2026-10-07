@@ -19,6 +19,7 @@ import { StatusBar } from "expo-status-bar";
 import RootNavigator from "./src/navigation/RootNavigator";
 import { AuthProvider } from "./src/context/AuthContext";
 import PermissionHost from "./src/components/PermissionHost";
+import PushHost from "./src/components/PushHost";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -62,6 +63,7 @@ export default function App() {
           <StatusBar style="light" />
           <RootNavigator />
           <PermissionHost />
+          <PushHost />
         </View>
       </AuthProvider>
     </SafeAreaProvider>
