@@ -67,15 +67,17 @@ async function notifySafetyTeam(message: string): Promise<number> {
     return 0;
   }
 
+  // All at once, not one after another: a slow or failing text provider must
+  // not make the person holding the panic button wait N times as long.
+  const results = await Promise.allSettled(phones.map((phone) => smsProvider.send(phone, message)));
   let delivered = 0;
-  for (const phone of phones) {
-    try {
-      await smsProvider.send(phone, message);
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
       if (smsIsReal()) delivered += 1;
-    } catch (err) {
-      console.error(`[sos] failed to text ${phone}`, err);
+    } else {
+      console.error(`[sos] failed to text ${phones[index]}`, result.reason);
     }
-  }
+  });
   return delivered;
 }
 
@@ -123,7 +125,8 @@ async function describeParties(errand: typeof errands.$inferSelect, role: Role) 
 
 /** Raises (or refreshes) an SOS for `userId` on `errandId`. Idempotent per
  * (errand, person): pressing again while an alert is active just refreshes
- * its location and does not re-text the safety team. */
+ * its location and does not re-text the safety team — unless nobody was
+ * reached the first time, in which case it tries the texts again. */
 export async function triggerSos(params: {
   errandId: unknown;
   role: Role;
@@ -142,8 +145,24 @@ export async function triggerSos(params: {
     return toSosAlert(row);
   };
 
+  const sosText = async () =>
+    `Gracerandly SOS from the ${role} on errand ${errandId.slice(0, 8)}. ${await describeParties(errand, role)}. Location: ${mapsLink(location)}`;
+
   const existing = await findActiveAlert(errandId, role);
-  if (existing) return refresh(existing.id);
+  if (existing) {
+    const refreshed = await refresh(existing.id);
+    // Someone was reached last time: a repeat press is just a location
+    // refresh (no repeat texts).
+    if (existing.notifiedCount > 0) return refreshed;
+    // Nobody was reached (the text provider was down, or no safety numbers
+    // were set up yet). The apps re-send every 30 seconds while an alert is
+    // active, so try the texts again now rather than leaving the alert
+    // stuck at "nobody was told".
+    const retried = await notifySafetyTeam(await sosText());
+    if (retried === 0) return refreshed;
+    const [updated] = await db.update(sosAlerts).set({ notifiedCount: retried }).where(eq(sosAlerts.id, existing.id)).returning();
+    return toSosAlert(updated);
+  }
 
   let created: typeof sosAlerts.$inferSelect;
   try {
@@ -161,10 +180,7 @@ export async function triggerSos(params: {
     throw err;
   }
 
-  const parties = await describeParties(errand, role);
-  const notifiedCount = await notifySafetyTeam(
-    `Gracerandly SOS from the ${role} on errand ${errandId.slice(0, 8)}. ${parties}. Location: ${mapsLink(location)}`
-  );
+  const notifiedCount = await notifySafetyTeam(await sosText());
   if (notifiedCount === 0) return toSosAlert(created);
 
   const [updated] = await db.update(sosAlerts).set({ notifiedCount }).where(eq(sosAlerts.id, created.id)).returning();

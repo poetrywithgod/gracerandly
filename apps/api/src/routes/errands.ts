@@ -14,7 +14,7 @@ import { triggerSos, getActiveSos, resolveSos } from "../lib/sos";
 import { triggerSosSchema } from "../schemas/sos";
 import { sharePositionSchema } from "../schemas/location";
 import { submitReviewSchema } from "../schemas/review";
-import { getReviewState, submitReview } from "../lib/reviews";
+import { getReviewState, listReviewsAbout, submitReview } from "../lib/reviews";
 import { LIVE_SHARING_STATUSES, setLivePosition } from "../lib/live-positions";
 import type { Errand, VendorDisbursement } from "@gracerandly/shared-types";
 
@@ -344,6 +344,16 @@ router.post(
     const { rating, comment } = submitReviewSchema.parse(req.body);
     await submitReview(existing, "requester", req.requesterId!, rating, comment);
     res.status(201).json(await getReviewState(existing, "requester"));
+  })
+);
+
+// What others have written about the runner on this errand.
+router.get(
+  "/:id/counterpart-reviews",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    if (!existing.runnerId) throw AppErrors.notFound("No runner on this errand yet");
+    res.json(await listReviewsAbout("runner", existing.runnerId));
   })
 );
 

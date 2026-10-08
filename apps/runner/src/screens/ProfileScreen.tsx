@@ -23,6 +23,7 @@ import TextField from "../components/TextField";
 import PillSelect from "../components/PillSelect";
 import ConfirmModal from "../components/ConfirmModal";
 import AvatarPickerModal from "../components/AvatarPickerModal";
+import ReviewsListModal from "../components/ReviewsListModal";
 import { SkeletonBlock } from "../components/Skeleton";
 import type { MainStackParamList, TabParamList } from "../navigation/types";
 
@@ -107,6 +108,7 @@ export default function ProfileScreen() {
   const [errands, setErrands] = useState<Errand[] | null>(null);
   const [earnings, setEarnings] = useState<EarningsResponse | null>(null);
   const [rating, setRating] = useState<{ average: number | null; count: number } | null>(null);
+  const [showReviews, setShowReviews] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
 
@@ -307,6 +309,7 @@ export default function ProfileScreen() {
               icon={<Star size={18} color={theme.colors.primary} />}
               label={rating && rating.count > 0 ? `Rating (${rating.count})` : "Rating"}
               value={earnings ? (rating && rating.average !== null ? rating.average.toFixed(1) : "New") : null}
+              onPress={rating && rating.count > 0 ? () => setShowReviews(true) : undefined}
             />
           </View>
           {statsError ? <Text style={styles.statsErrorText}>{statsError}</Text> : null}
@@ -430,6 +433,12 @@ export default function ProfileScreen() {
         </>
       )}
 
+      <ReviewsListModal
+        visible={showReviews}
+        onClose={() => setShowReviews(false)}
+        title="Reviews about you"
+        path="/runners/me/reviews"
+      />
       <ConfirmModal
         visible={showSignOutConfirm}
         title="Sign out?"
@@ -451,9 +460,19 @@ export default function ProfileScreen() {
   );
 }
 
-function StatTile({ icon, label, value }: { icon: React.ReactNode; label: string; value: string | null }) {
+function StatTile({
+  icon,
+  label,
+  value,
+  onPress,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string | null;
+  onPress?: () => void;
+}) {
   return (
-    <View style={styles.statTile}>
+    <Pressable style={styles.statTile} onPress={onPress} disabled={!onPress} accessibilityRole={onPress ? "button" : undefined}>
       {icon}
       {value === null ? (
         <SkeletonBlock width={40} height={16} style={styles.statSkeleton} />
@@ -463,7 +482,7 @@ function StatTile({ icon, label, value }: { icon: React.ReactNode; label: string
         </Text>
       )}
       <Text style={styles.statLabel}>{label}</Text>
-    </View>
+    </Pressable>
   );
 }
 

@@ -21,7 +21,7 @@ const theme = getTheme("light");
 
 // Nigeria's national emergency number.
 const EMERGENCY_NUMBER = "112";
-const HOLD_MS = 1500;
+const HOLD_MS = 2000;
 // While an alert is active, keep the safety team's copy of the location
 // fresh. The server treats a repeat press as a location refresh (no repeat
 // texts), so this is cheap.

@@ -6,6 +6,7 @@ import { View, Text, Pressable, StyleSheet } from "react-native";
 import { Star } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import Button from "./Button";
+import ReviewsListModal from "./ReviewsListModal";
 import TextField from "./TextField";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
@@ -44,6 +45,7 @@ export default function ReviewCard({ errandId }: { errandId: string }) {
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showReviews, setShowReviews] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -81,6 +83,13 @@ export default function ReviewCard({ errandId }: { errandId: string }) {
   if (!state || (!state.canReview && !state.myReview)) return null;
 
   const { average, count } = state.otherRating;
+  const seeReviews = (
+    <Pressable onPress={() => setShowReviews(true)} accessibilityRole="button" hitSlop={6}>
+      <Text style={styles.link}>
+        {average !== null ? `${average.toFixed(1)} average` : "Ratings"} ({count} {count === 1 ? "rating" : "ratings"}) · See reviews
+      </Text>
+    </Pressable>
+  );
 
   return (
     <View style={styles.card}>
@@ -89,15 +98,12 @@ export default function ReviewCard({ errandId }: { errandId: string }) {
           <Text style={styles.title}>You rated the runner</Text>
           <Stars value={state.myReview.rating} size={24} />
           <Text style={styles.note}>Thanks for your feedback.</Text>
+          {count > 0 ? seeReviews : null}
         </>
       ) : (
         <>
           <Text style={styles.title}>Rate the runner</Text>
-          {average !== null ? (
-            <Text style={styles.note}>
-              Average rating so far: {average.toFixed(1)} ({count} {count === 1 ? "rating" : "ratings"})
-            </Text>
-          ) : null}
+          {count > 0 ? seeReviews : null}
           <Stars value={rating} onChange={setRating} />
           <TextField
             label="Comment (optional)"
@@ -107,10 +113,17 @@ export default function ReviewCard({ errandId }: { errandId: string }) {
             maxLength={500}
             placeholder="How did it go?"
           />
+          <Text style={styles.note}>Your rating and comment are shown to others, with your first name.</Text>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Button label="Submit rating" onPress={submit} loading={submitting} />
         </>
       )}
+      <ReviewsListModal
+        visible={showReviews}
+        onClose={() => setShowReviews(false)}
+        title="Reviews about the runner"
+        path={`/errands/${errandId}/counterpart-reviews`}
+      />
     </View>
   );
 }
@@ -125,6 +138,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   title: { fontFamily: theme.fonts.uiMedium, fontSize: 15, color: theme.colors.text },
+  link: { fontFamily: theme.fonts.uiMedium, fontSize: 13, color: theme.colors.primary, textDecorationLine: "underline" },
   note: { fontFamily: theme.fonts.ui, fontSize: 13, color: theme.colors.textMuted },
   error: { fontFamily: theme.fonts.ui, fontSize: 13, color: theme.colors.danger },
   stars: { flexDirection: "row", gap: 8 },

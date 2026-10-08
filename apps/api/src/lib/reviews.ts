@@ -2,9 +2,9 @@
  * Ratings and reviews between the two sides of a delivered errand.
  * See errandReviews in db/schema.ts for the rules.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db/client";
-import { errandReviews, type ErrandReviewRow } from "../db/schema";
+import { errandReviews, requesters, runners, type ErrandReviewRow } from "../db/schema";
 import { AppErrors } from "./errors";
 
 export type ReviewerRole = "requester" | "runner";
@@ -78,4 +78,49 @@ export async function submitReview(
     .returning();
   if (!inserted) throw AppErrors.conflict("You've already rated this errand");
   return inserted;
+}
+
+export interface PublicReview {
+  id: string;
+  rating: number;
+  comment: string | null;
+  createdAt: string;
+  /** First name only — reviews show who wrote them without exposing full names. */
+  reviewerName: string;
+}
+
+const REVIEWS_PAGE_SIZE = 50;
+
+/** The reviews others have written about this person, newest first, with
+ * their average. A runner is reviewed by requesters and vice versa. */
+export async function listReviewsAbout(
+  personRole: ReviewerRole,
+  personId: string
+): Promise<{ summary: RatingSummary; reviews: PublicReview[] }> {
+  const reviewerRole: ReviewerRole = personRole === "runner" ? "requester" : "runner";
+  const reviewerTable = reviewerRole === "requester" ? requesters : runners;
+  const rows = await db
+    .select({
+      id: errandReviews.id,
+      rating: errandReviews.rating,
+      comment: errandReviews.comment,
+      createdAt: errandReviews.createdAt,
+      reviewerFullName: reviewerTable.fullName,
+    })
+    .from(errandReviews)
+    .leftJoin(reviewerTable, eq(reviewerTable.id, errandReviews.reviewerId))
+    .where(and(eq(errandReviews.revieweeId, personId), eq(errandReviews.reviewerRole, reviewerRole)))
+    .orderBy(desc(errandReviews.createdAt))
+    .limit(REVIEWS_PAGE_SIZE);
+
+  return {
+    summary: await ratingSummaryFor(personRole, personId),
+    reviews: rows.map((row) => ({
+      id: row.id,
+      rating: row.rating,
+      comment: row.comment,
+      createdAt: row.createdAt.toISOString(),
+      reviewerName: row.reviewerFullName?.trim().split(/\s+/)[0] || "Someone",
+    })),
+  };
 }

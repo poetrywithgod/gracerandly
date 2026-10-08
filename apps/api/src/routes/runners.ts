@@ -19,7 +19,7 @@ import {
 import { createVendorDisbursementSchema } from "../schemas/vendor-disbursement";
 import { LIVE_SHARING_STATUSES, getLivePosition } from "../lib/live-positions";
 import { submitReviewSchema } from "../schemas/review";
-import { getReviewState, ratingSummaryFor, submitReview } from "../lib/reviews";
+import { getReviewState, listReviewsAbout, ratingSummaryFor, submitReview } from "../lib/reviews";
 import { signAuthToken } from "../lib/jwt";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -995,6 +995,25 @@ router.get(
   requireRunnerAuth,
   asyncHandler(async (req, res) => {
     res.json(await ratingSummaryFor("runner", req.runnerId!));
+  })
+);
+
+// What requesters have written about this runner.
+router.get(
+  "/me/reviews",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await listReviewsAbout("runner", req.runnerId!));
+  })
+);
+
+// What other runners have written about the requester on this errand.
+router.get(
+  "/errands/:id/counterpart-reviews",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
+    res.json(await listReviewsAbout("requester", existing.requesterId));
   })
 );
 
