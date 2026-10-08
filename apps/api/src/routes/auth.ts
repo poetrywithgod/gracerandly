@@ -16,6 +16,7 @@ import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
 import { requestVerificationCode, confirmVerificationCode } from "../lib/verification";
+import { ratingSummaryFor, listReviewsAbout } from "../lib/reviews";
 import type { Requester } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -127,6 +128,24 @@ router.get(
     }
 
     res.json({ user: toRequester(row) });
+  })
+);
+
+// How runners have rated this requester — for the requester's own profile.
+router.get(
+  "/me/rating",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await ratingSummaryFor("requester", req.requesterId!));
+  })
+);
+
+// What runners have written about this requester.
+router.get(
+  "/me/reviews",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await listReviewsAbout("requester", req.requesterId!));
   })
 );
 

@@ -8,7 +8,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  Alert,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useAudioRecorder, RecordingPresets, setAudioModeAsync } from "expo-audio";
@@ -23,6 +22,7 @@ import type { LocalChatMessage } from "../lib/chatDb";
 import Avatar from "../components/Avatar";
 import VoiceNoteBubble from "../components/VoiceNoteBubble";
 import CallOverlay from "../components/CallOverlay";
+import NoticeModal from "../components/NoticeModal";
 import type { MainStackParamList } from "../navigation/types";
 
 const theme = getTheme("light");
@@ -49,6 +49,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const recorder = useAudioRecorder(RecordingPresets.LOW_QUALITY);
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
+  const [showNotConnected, setShowNotConnected] = useState(false);
 
   useEffect(() => {
     if (!token) return;
@@ -86,14 +87,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     // part of it the header actually needs to re-render for.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigation, otherName, participant?.avatarUrl, chat.connectionState]);
-
-  useEffect(() => {
-    if (chat.callUnavailable) {
-      Alert.alert("Can't call right now", `${otherName} isn't online in this chat.`, [
-        { text: "OK", onPress: chat.dismissCallUnavailable },
-      ]);
-    }
-  }, [chat.callUnavailable, otherName, chat.dismissCallUnavailable]);
 
   function handleSend() {
     if (editingId) {
@@ -135,7 +128,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     const uri = recorder.uri;
     if (!send || !uri) return;
     const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-    if (!chat.sendAudio(base64)) Alert.alert("Not connected", "Couldn't send the voice note — try again once reconnected.");
+    if (!chat.sendAudio(base64)) setShowNotConnected(true);
   }
 
   // Tick the visible timer while recording, and stop-and-send at the cap.
@@ -269,6 +262,19 @@ export default function ChatScreen({ route, navigation }: Props) {
           onEnd={chat.endCall}
         />
       ) : null}
+
+      <NoticeModal
+        visible={chat.callUnavailable}
+        title="Can't call right now"
+        body={`${otherName} isn't online in this chat.`}
+        onClose={chat.dismissCallUnavailable}
+      />
+      <NoticeModal
+        visible={showNotConnected}
+        title="Not connected"
+        body="Couldn't send the voice note — try again once reconnected."
+        onClose={() => setShowNotConnected(false)}
+      />
     </KeyboardAvoidingView>
   );
 }

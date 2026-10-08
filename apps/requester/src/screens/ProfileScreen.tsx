@@ -10,6 +10,8 @@ import {
   CheckCircle2,
   Wallet,
   Camera,
+  Star,
+  ChevronRight,
 } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { Errand, Gender, RequesterStatus, VerificationChannel } from "@gracerandly/shared-types";
@@ -19,6 +21,7 @@ import PillSelect from "../components/PillSelect";
 import { SkeletonBlock } from "../components/Skeleton";
 import ConfirmModal from "../components/ConfirmModal";
 import AvatarPickerModal from "../components/AvatarPickerModal";
+import ReviewsListModal from "../components/ReviewsListModal";
 import VerificationModal from "../components/VerificationModal";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
@@ -77,6 +80,9 @@ export default function ProfileScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
 
+  const [rating, setRating] = useState<{ average: number | null; count: number } | null>(null);
+  const [showReviews, setShowReviews] = useState(false);
+
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
   const [isSavingAvatar, setIsSavingAvatar] = useState(false);
@@ -93,6 +99,12 @@ export default function ProfileScreen() {
           headers: { Authorization: `Bearer ${token}` },
         });
         setErrands(response.errands);
+        // The rating is a nice-to-have: if it can't load, the rest of the profile still should.
+        apiFetch<{ average: number | null; count: number }>("/auth/me/rating", {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+          .then(setRating)
+          .catch(() => {});
       } catch (err) {
         setStatsError(err instanceof ApiError ? err.message : "Couldn't load your activity");
       } finally {
@@ -285,6 +297,29 @@ export default function ProfileScreen() {
           </View>
           {statsError ? <Text style={styles.statsErrorText}>{statsError}</Text> : null}
 
+          <Pressable
+            style={styles.ratingCard}
+            onPress={() => setShowReviews(true)}
+            disabled={!rating || rating.count === 0}
+            accessibilityRole="button"
+            accessibilityLabel="See reviews about you"
+          >
+            <View style={styles.ratingLeft}>
+              <Star size={18} color={theme.colors.primary} />
+              <Text style={styles.ratingLabel}>Your rating</Text>
+            </View>
+            <View style={styles.ratingRight}>
+              <Text style={styles.ratingValue}>
+                {rating === null
+                  ? "—"
+                  : rating.average !== null
+                    ? `${rating.average.toFixed(1)} (${rating.count})`
+                    : "New"}
+              </Text>
+              {rating && rating.count > 0 ? <ChevronRight size={16} color={theme.colors.textMuted} /> : null}
+            </View>
+          </Pressable>
+
           <View style={styles.infoCard}>
             <InfoRow
               icon={<Phone size={16} color={theme.colors.textMuted} />}
@@ -354,6 +389,13 @@ export default function ProfileScreen() {
           />
         </>
       )}
+
+      <ReviewsListModal
+        visible={showReviews}
+        onClose={() => setShowReviews(false)}
+        title="Reviews about you"
+        path="/auth/me/reviews"
+      />
 
       <ConfirmModal
         visible={showSignOutConfirm}
@@ -534,6 +576,20 @@ const styles = StyleSheet.create({
     color: theme.colors.danger,
     marginBottom: theme.spacing.md,
   },
+  ratingCard: {
+    alignSelf: "stretch",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.md,
+  },
+  ratingLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
+  ratingLabel: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.textMuted },
+  ratingRight: { flexDirection: "row", alignItems: "center", gap: 6 },
+  ratingValue: { fontFamily: theme.fonts.uiSemibold, fontSize: 15, color: theme.colors.text },
   infoCard: {
     alignSelf: "stretch",
     backgroundColor: theme.colors.surface,
