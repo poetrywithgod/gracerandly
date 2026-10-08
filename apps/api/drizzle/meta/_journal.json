@@ -99,6 +99,13 @@
       "when": 1791402268990,
       "tag": "0013_vengeful_manta",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791445100876,
+      "tag": "0014_ancient_roland_deschain",
+      "breakpoints": true
     }
   ]
 }

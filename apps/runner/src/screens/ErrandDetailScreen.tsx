@@ -8,6 +8,7 @@ import { apiFetch, ApiError } from "../lib/apiClient";
 import { getCurrentCoordinate } from "../lib/location";
 import { requestLiveLocationRefresh } from "../lib/liveLocation";
 import LiveTrackingMap from "../components/LiveTrackingMap";
+import ReviewCard from "../components/ReviewCard";
 import Button from "../components/Button";
 import SosButton from "../components/SosButton";
 import TextField from "../components/TextField";
@@ -149,6 +150,8 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
       {LIVE_MAP_STATUSES.includes(errand.status) ? (
         <LiveTrackingMap errandId={errand.id} pickup={errand.pickup} dropoff={errand.dropoff} status={errand.status} />
       ) : null}
+
+      {errand.status === "delivered" ? <ReviewCard errandId={errand.id} /> : null}
 
       <View style={styles.card}>
         <Text style={styles.sectionLabel}>Pickup</Text>

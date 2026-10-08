@@ -18,6 +18,8 @@ import {
 } from "../schemas/runner";
 import { createVendorDisbursementSchema } from "../schemas/vendor-disbursement";
 import { LIVE_SHARING_STATUSES, getLivePosition } from "../lib/live-positions";
+import { submitReviewSchema } from "../schemas/review";
+import { getReviewState, ratingSummaryFor, submitReview } from "../lib/reviews";
 import { signAuthToken } from "../lib/jwt";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -963,6 +965,36 @@ router.get(
     res.json({
       position: position ? { lat: position.lat, lng: position.lng, heading: position.heading, updatedAt: position.updatedAt } : null,
     });
+  })
+);
+
+// Rating the requester once the errand is delivered (one rating per errand).
+router.get(
+  "/errands/:id/review",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
+    res.json(await getReviewState(existing, "runner"));
+  })
+);
+
+router.post(
+  "/errands/:id/review",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
+    const { rating, comment } = submitReviewSchema.parse(req.body);
+    await submitReview(existing, "runner", req.runnerId!, rating, comment);
+    res.status(201).json(await getReviewState(existing, "runner"));
+  })
+);
+
+// How requesters have rated this runner — for the runner's own profile.
+router.get(
+  "/me/rating",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await ratingSummaryFor("runner", req.runnerId!));
   })
 );
 

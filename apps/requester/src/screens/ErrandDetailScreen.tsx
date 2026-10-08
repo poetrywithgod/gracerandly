@@ -10,6 +10,7 @@ import SosButton from "../components/SosButton";
 import LoadingScreen from "../components/LoadingScreen";
 import ErrandPostedModal from "../components/ErrandPostedModal";
 import LiveTrackingMap from "../components/LiveTrackingMap";
+import ReviewCard from "../components/ReviewCard";
 import ConfirmModal from "../components/ConfirmModal";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
@@ -185,6 +186,8 @@ export default function ErrandDetailScreen() {
           status={errand.status}
         />
       ) : null}
+
+      {errand.status === "delivered" ? <ReviewCard errandId={errand.id} /> : null}
 
       {TRACKED_STATUSES.has(errand.status) && errand.deliveryPin ? (
         <View style={styles.pinCard}>

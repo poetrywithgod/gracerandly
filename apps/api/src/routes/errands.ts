@@ -13,6 +13,8 @@ import { getAgoraJoinInfo } from "../lib/agora";
 import { triggerSos, getActiveSos, resolveSos } from "../lib/sos";
 import { triggerSosSchema } from "../schemas/sos";
 import { sharePositionSchema } from "../schemas/location";
+import { submitReviewSchema } from "../schemas/review";
+import { getReviewState, submitReview } from "../lib/reviews";
 import { LIVE_SHARING_STATUSES, setLivePosition } from "../lib/live-positions";
 import type { Errand, VendorDisbursement } from "@gracerandly/shared-types";
 
@@ -323,6 +325,25 @@ router.post(
     const position = sharePositionSchema.parse(req.body);
     setLivePosition(existing.id, "requester", position);
     res.json({ shared: true });
+  })
+);
+
+// Rating the runner once the errand is delivered (one rating per errand).
+router.get(
+  "/:id/review",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    res.json(await getReviewState(existing, "requester"));
+  })
+);
+
+router.post(
+  "/:id/review",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    const { rating, comment } = submitReviewSchema.parse(req.body);
+    await submitReview(existing, "requester", req.requesterId!, rating, comment);
+    res.status(201).json(await getReviewState(existing, "requester"));
   })
 );
 

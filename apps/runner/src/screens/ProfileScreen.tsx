@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   Wallet,
   Landmark,
+  Star,
 } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { Errand, VehicleType } from "@gracerandly/shared-types";
@@ -105,6 +106,7 @@ export default function ProfileScreen() {
   // --- Stats ---
   const [errands, setErrands] = useState<Errand[] | null>(null);
   const [earnings, setEarnings] = useState<EarningsResponse | null>(null);
+  const [rating, setRating] = useState<{ average: number | null; count: number } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
 
@@ -116,16 +118,21 @@ export default function ProfileScreen() {
       if (isRefresh) setIsRefreshing(true);
       setStatsError(null);
       try {
-        const [errandsResponse, earningsResponse] = await Promise.all([
+        const [errandsResponse, earningsResponse, ratingResponse] = await Promise.all([
           apiFetch<{ errands: Errand[] }>("/runners/errands/mine", {
             headers: { Authorization: `Bearer ${token}` },
           }),
           apiFetch<EarningsResponse>("/runners/me/earnings", {
             headers: { Authorization: `Bearer ${token}` },
           }),
+          // The rating is a nice-to-have: if it can't load, the rest of the profile still should.
+          apiFetch<{ average: number | null; count: number }>("/runners/me/rating", {
+            headers: { Authorization: `Bearer ${token}` },
+          }).catch(() => null),
         ]);
         setErrands(errandsResponse.errands);
         setEarnings(earningsResponse);
+        setRating(ratingResponse);
       } catch (err) {
         setStatsError(err instanceof ApiError ? err.message : "Couldn't load your activity");
       } finally {
@@ -295,6 +302,11 @@ export default function ProfileScreen() {
               icon={<Wallet size={18} color={theme.colors.primary} />}
               label="Earned"
               value={earnings ? formatNaira(earnings.totalEarned) : null}
+            />
+            <StatTile
+              icon={<Star size={18} color={theme.colors.primary} />}
+              label={rating && rating.count > 0 ? `Rating (${rating.count})` : "Rating"}
+              value={earnings ? (rating && rating.average !== null ? rating.average.toFixed(1) : "New") : null}
             />
           </View>
           {statsError ? <Text style={styles.statsErrorText}>{statsError}</Text> : null}

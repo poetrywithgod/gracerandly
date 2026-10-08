@@ -8,6 +8,8 @@ import {
   jsonb,
   timestamp,
   uniqueIndex,
+  index,
+  check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { ErrandItem, GeoPoint, Guarantor, RunnerLocation } from "@gracerandly/shared-types";
@@ -481,3 +483,35 @@ export const pushTokens = pgTable(
 );
 
 export type PushTokenRow = typeof pushTokens.$inferSelect;
+
+// Ratings and reviews. After an errand is delivered each side can rate the
+// other once: the requester rates the runner, the runner rates the
+// requester. Only the 1-5 rating feeds anything people see (the other
+// party's average); the written comment is kept for the team (a future
+// admin dashboard) and isn't shown to the person it's about.
+export const reviewerRoleEnum = pgEnum("reviewer_role", ["requester", "runner"]);
+
+export const errandReviews = pgTable(
+  "errand_reviews",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    errandId: uuid("errand_id")
+      .notNull()
+      .references(() => errands.id),
+    reviewerRole: reviewerRoleEnum("reviewer_role").notNull(),
+    reviewerId: uuid("reviewer_id").notNull(),
+    // The person being rated (a runner id when the reviewer is a requester, and vice versa).
+    revieweeId: uuid("reviewee_id").notNull(),
+    rating: integer("rating").notNull(),
+    comment: text("comment"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // One review per side per errand.
+    uniqueIndex("errand_reviews_one_per_side_idx").on(table.errandId, table.reviewerRole),
+    index("errand_reviews_reviewee_idx").on(table.revieweeId),
+    check("errand_reviews_rating_range", sql`${table.rating} between 1 and 5`),
+  ]
+);
+
+export type ErrandReviewRow = typeof errandReviews.$inferSelect;
