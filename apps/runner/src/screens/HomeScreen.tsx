@@ -7,6 +7,7 @@ import { getTheme } from "@gracerandly/theme";
 import type { Errand } from "@gracerandly/shared-types";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
+import { requestLiveLocationRefresh } from "../lib/liveLocation";
 import { getCurrentCoordinate, LocationPermissionDeniedError } from "../lib/location";
 import Button from "../components/Button";
 import type { MainStackParamList, TabParamList } from "../navigation/types";
@@ -114,6 +115,7 @@ export default function HomeScreen() {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
         });
+        requestLiveLocationRefresh();
         await load();
         navigation.navigate("ErrandDetail", { errandId });
       } catch (err) {

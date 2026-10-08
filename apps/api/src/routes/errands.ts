@@ -12,6 +12,8 @@ import { parseErrandFromText } from "../lib/ai";
 import { getAgoraJoinInfo } from "../lib/agora";
 import { triggerSos, getActiveSos, resolveSos } from "../lib/sos";
 import { triggerSosSchema } from "../schemas/sos";
+import { sharePositionSchema } from "../schemas/location";
+import { LIVE_SHARING_STATUSES, setLivePosition } from "../lib/live-positions";
 import type { Errand, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -304,6 +306,23 @@ router.post(
   asyncHandler(async (req, res) => {
     const alert = await resolveSos(req.params.id, "requester", req.requesterId!);
     res.json({ alert });
+  })
+);
+
+// The requester's phone reports where they are while a runner is on the
+// errand, so the runner can see them on the map. Read by the runner through
+// GET /runners/errands/:id/requester-location (lib/live-positions.ts says
+// why this isn't a public Realtime channel).
+router.post(
+  "/:id/location",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    if (!existing.runnerId || !LIVE_SHARING_STATUSES.has(existing.status)) {
+      throw AppErrors.conflict("Location sharing is only on while a runner is on this errand");
+    }
+    const position = sharePositionSchema.parse(req.body);
+    setLivePosition(existing.id, "requester", position);
+    res.json({ shared: true });
   })
 );
 

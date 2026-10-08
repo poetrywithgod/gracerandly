@@ -20,6 +20,7 @@ import RootNavigator from "./src/navigation/RootNavigator";
 import { AuthProvider } from "./src/context/AuthContext";
 import PermissionHost from "./src/components/PermissionHost";
 import PushHost from "./src/components/PushHost";
+import LiveLocationHost from "./src/components/LiveLocationHost";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -64,6 +65,7 @@ export default function App() {
           <RootNavigator />
           <PermissionHost />
           <PushHost />
+          <LiveLocationHost />
         </View>
       </AuthProvider>
     </SafeAreaProvider>

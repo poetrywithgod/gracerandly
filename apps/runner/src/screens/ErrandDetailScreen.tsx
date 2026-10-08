@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
 import type { Errand, ErrandStatus } from "@gracerandly/shared-types";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
-import { getCurrentCoordinate, watchPosition } from "../lib/location";
-import { publishRunnerLocation, stopPublishingLocation } from "../lib/realtime";
+import { getCurrentCoordinate } from "../lib/location";
+import { requestLiveLocationRefresh } from "../lib/liveLocation";
+import LiveTrackingMap from "../components/LiveTrackingMap";
 import Button from "../components/Button";
 import SosButton from "../components/SosButton";
 import TextField from "../components/TextField";
@@ -30,9 +31,9 @@ const CHAT_ALLOWED_STATUSES: ErrandStatus[] = [
 // Mirrors apps/api's lib/sos.ts SOS_ALLOWED_STATUSES — same window as chat.
 const SOS_ALLOWED_STATUSES: ErrandStatus[] = CHAT_ALLOWED_STATUSES;
 
-// Statuses where the runner has an errand in hand and should be
-// broadcasting position for the requester's live tracking map.
-const TRACKING_STATUSES: ErrandStatus[] = ["en_route_to_pickup", "in_progress", "en_route_to_delivery"];
+// Statuses in which the live map is shown. Position sharing itself is
+// handled app-wide by components/LiveLocationHost.tsx, not by this screen.
+const LIVE_MAP_STATUSES: ErrandStatus[] = ["accepted", "en_route_to_pickup", "in_progress", "en_route_to_delivery"];
 
 // (currentStatus -> what accepting the next step is called, and which
 // status it moves to). Kept as an explicit map rather than deriving from
@@ -54,7 +55,6 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const stopWatching = useRef<(() => void) | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -76,38 +76,6 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
   useEffect(() => {
     load();
   }, [load]);
-
-  // Broadcasts live position on this errand's channel whenever it's in a
-  // trackable status — the requester's Home/ErrandDetail screens subscribe
-  // to the same channel (see apps/requester/src/lib/realtime.ts).
-  useEffect(() => {
-    if (!errand || !TRACKING_STATUSES.includes(errand.status)) {
-      stopWatching.current?.();
-      stopWatching.current = null;
-      return;
-    }
-
-    let cancelled = false;
-    watchPosition((coordinate) => {
-      publishRunnerLocation(errandId, { lat: coordinate.latitude, lng: coordinate.longitude, heading: coordinate.heading });
-    }).then((stop) => {
-      if (cancelled) {
-        stop();
-      } else {
-        stopWatching.current = stop;
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      stopWatching.current?.();
-      stopWatching.current = null;
-    };
-  }, [errand?.status, errandId]);
-
-  useEffect(() => {
-    return () => stopPublishingLocation(errandId);
-  }, [errandId]);
 
   const handleAdvance = useCallback(async () => {
     if (!errand || !token) return;
@@ -138,6 +106,9 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
       });
       setErrand(response.errand);
       setPin("");
+      // The status changed — let the live-location host re-check which
+      // errands are active instead of waiting for its next poll.
+      requestLiveLocationRefresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't update this errand");
     } finally {
@@ -174,6 +145,10 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
           </Text>
         ) : null}
       </View>
+
+      {LIVE_MAP_STATUSES.includes(errand.status) ? (
+        <LiveTrackingMap errandId={errand.id} pickup={errand.pickup} dropoff={errand.dropoff} status={errand.status} />
+      ) : null}
 
       <View style={styles.card}>
         <Text style={styles.sectionLabel}>Pickup</Text>

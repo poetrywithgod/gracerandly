@@ -3,7 +3,10 @@ import { View, Text, StyleSheet, ActivityIndicator } from "react-native";
 import { WebView } from "react-native-webview";
 import { getTheme } from "@gracerandly/theme";
 import type { GeoPoint, ErrandStatus } from "@gracerandly/shared-types";
-import { LEAFLET_JS, LEAFLET_CSS } from "../lib/leafletAssets";
+import { useAuth } from "../context/AuthContext";
+import { buildLiveMapHtml } from "../lib/liveMapHtml";
+import { fetchChatParticipant } from "../lib/chatApi";
+import { getOwnPosition, subscribeToOwnPosition, type OwnPosition } from "../lib/liveLocation";
 import { subscribeToRunnerLocation, type RunnerPosition } from "../lib/realtime";
 import { getFastestRouteWithEstimates, getEtaToPoint, formatDistance, formatDuration } from "../lib/routing";
 
@@ -30,110 +33,6 @@ const LEG_LABEL: Record<"pickup" | "dropoff", string> = {
   dropoff: "Runner heading to you",
 };
 
-function buildLiveMapHtml(pickup: GeoPoint, dropoff: GeoPoint, routeCoordinates: [number, number][]): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <style>${LEAFLET_CSS}</style>
-  <style>
-    html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; }
-    .leaflet-control-attribution { font-size: 8px; }
-    .runner-icon-inner {
-      width: 22px; height: 22px; border-radius: 11px;
-      background: ${theme.colors.primaryDark};
-      border: 3px solid #fff;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-      transition: transform 0.15s linear;
-    }
-  </style>
-</head>
-<body>
-  <div id="map"></div>
-  <script>${LEAFLET_JS}</script>
-  <script>
-    var map = L.map('map', { zoomControl: false });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
-
-    function dot(color) {
-      return L.divIcon({
-        className: '',
-        html: '<div style="background:' + color + ';width:14px;height:14px;border-radius:7px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.4);"></div>',
-        iconSize: [14, 14]
-      });
-    }
-
-    var pickupMarker = L.marker([${pickup.lat}, ${pickup.lng}], { icon: dot('${theme.colors.primary}') }).addTo(map);
-    var dropoffMarker = L.marker([${dropoff.lat}, ${dropoff.lng}], { icon: dot('${theme.colors.primaryDark}') }).addTo(map);
-    var routeLine = L.polyline(${JSON.stringify(routeCoordinates)}, {
-      color: '${theme.colors.primary}',
-      weight: 4,
-      opacity: 0.6
-    }).addTo(map);
-
-    map.fitBounds(routeLine.getBounds(), { padding: [32, 32] });
-
-    // Icon is a plain div wrapping an inner ".runner-icon-inner" — Leaflet
-    // manages the outer element's own transform (translate3d) for
-    // positioning on every setLatLng call, so rotating heading has to be
-    // applied to a separate inner element or it fights Leaflet's own
-    // position updates every frame.
-    var runnerIcon = L.divIcon({ className: '', html: '<div class="runner-icon-inner"></div>', iconSize: [22, 22] });
-    var runnerMarker = null;
-    var currentLatLng = null;
-    var animationFrame = null;
-
-    function easeInOutQuad(t) { return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; }
-
-    // Called from React Native via injectJavaScript on every broadcast
-    // position. Glides the marker from its last spot to the new one over
-    // ~1.8s (roughly the fake-runner's tick interval) instead of snapping,
-    // so movement reads as continuous rather than jump-cut.
-    window.moveRunnerTo = function (lat, lng, heading) {
-      var target = L.latLng(lat, lng);
-
-      if (!runnerMarker) {
-        runnerMarker = L.marker(target, { icon: runnerIcon, zIndexOffset: 1000 }).addTo(map);
-        currentLatLng = target;
-        map.panTo(target, { animate: true });
-        return;
-      }
-
-      var start = currentLatLng;
-      var startTime = performance.now();
-      var durationMs = 1800;
-      if (animationFrame) cancelAnimationFrame(animationFrame);
-
-      function step(now) {
-        var t = Math.min(1, (now - startTime) / durationMs);
-        var eased = easeInOutQuad(t);
-        runnerMarker.setLatLng([
-          start.lat + (target.lat - start.lat) * eased,
-          start.lng + (target.lng - start.lng) * eased
-        ]);
-        if (t < 1) {
-          animationFrame = requestAnimationFrame(step);
-        } else {
-          currentLatLng = target;
-        }
-      }
-      animationFrame = requestAnimationFrame(step);
-
-      var el = runnerMarker.getElement();
-      var inner = el && el.querySelector('.runner-icon-inner');
-      if (inner) inner.style.transform = 'rotate(' + heading + 'deg)';
-
-      map.panTo(target, { animate: true, duration: 1.5 });
-    };
-  </script>
-</body>
-</html>`;
-}
-
 interface LiveTrackingMapProps {
   errandId: string;
   pickup: GeoPoint;
@@ -141,23 +40,64 @@ interface LiveTrackingMapProps {
   status: ErrandStatus;
 }
 
+interface Person {
+  name: string;
+  uri: string;
+}
+
 export default function LiveTrackingMap({ errandId, pickup, dropoff, status }: LiveTrackingMapProps) {
+  const { token, user } = useAuth();
   const webviewRef = useRef<WebView>(null);
   const [mapHtml, setMapHtml] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState(false);
   const [hasFirstPosition, setHasFirstPosition] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [runnerName, setRunnerName] = useState<string | null>(null);
   const [eta, setEta] = useState<{ distanceMeters: number; durationSeconds: number } | null>(null);
 
   const lastEtaFetchRef = useRef(0);
   const etaAbortRef = useRef<AbortController | null>(null);
 
+  // What the map page needs to be told. Kept in refs so that, whenever the
+  // page (re)loads, everything known so far can be replayed into it —
+  // positions that arrive before the page is ready aren't lost.
+  const pageReady = useRef(false);
+  const runnerPerson = useRef<Person>({ name: "Runner", uri: "" });
+  const lastRunner = useRef<RunnerPosition | null>(null);
+  const lastMe = useRef<OwnPosition | null>(getOwnPosition());
+
   const legTarget = ACTIVE_LEG_TARGET[status];
 
+  const inject = useCallback((js: string) => {
+    webviewRef.current?.injectJavaScript(`${js}; true;`);
+  }, []);
+
+  const sendAvatars = useCallback(() => {
+    if (!pageReady.current) return;
+    const me = { name: user?.fullName ?? "Me", uri: user?.avatarUrl ?? "" };
+    inject(
+      `window.setAvatar('runner', ${JSON.stringify(runnerPerson.current.name)}, ${JSON.stringify(runnerPerson.current.uri)});` +
+        `window.setAvatar('requester', ${JSON.stringify(me.name)}, ${JSON.stringify(me.uri)})`
+    );
+  }, [inject, user?.fullName, user?.avatarUrl]);
+
+  const sendRunner = useCallback(() => {
+    const p = lastRunner.current;
+    if (pageReady.current && p) inject(`window.setPerson('runner', ${p.latitude}, ${p.longitude})`);
+  }, [inject]);
+
+  const sendMe = useCallback(() => {
+    const p = lastMe.current;
+    if (pageReady.current && p) inject(`window.setPerson('requester', ${p.lat}, ${p.lng})`);
+  }, [inject]);
+
   // Fetch the overall pickup->dropoff road route once, purely as static
-  // context on the map — the runner marker moves independently on top of
-  // it as positions arrive, it isn't recomputed per-tick.
+  // context on the map — the people move independently on top of it as
+  // positions arrive, it isn't recomputed per-tick. If the public routing
+  // service is busy or unreachable the map still opens, just without the
+  // road line (before, one failed lookup meant no map at all).
   useEffect(() => {
     let cancelled = false;
+    pageReady.current = false;
     getFastestRouteWithEstimates(
       { latitude: pickup.lat, longitude: pickup.lng },
       { latitude: dropoff.lat, longitude: dropoff.lng }
@@ -165,25 +105,67 @@ export default function LiveTrackingMap({ errandId, pickup, dropoff, status }: L
       .then((result) => {
         if (cancelled) return;
         setMapHtml(
-          buildLiveMapHtml(
+          buildLiveMapHtml({
             pickup,
             dropoff,
-            result.route.coordinates.map((c) => [c.latitude, c.longitude] as [number, number])
-          )
+            routeCoordinates: result.route.coordinates.map((c) => [c.latitude, c.longitude] as [number, number]),
+          })
         );
       })
-      .catch(() => !cancelled && setLoadError(true));
+      .catch(() => {
+        if (!cancelled) setMapHtml(buildLiveMapHtml({ pickup, dropoff }));
+      });
     return () => {
       cancelled = true;
     };
   }, [pickup.lat, pickup.lng, dropoff.lat, dropoff.lng]);
 
+  // Who the runner is, for their avatar.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetchChatParticipant("requester", errandId, token)
+      .then((participant) => {
+        if (cancelled) return;
+        runnerPerson.current = { name: participant.name, uri: participant.avatarUrl ?? "" };
+        setRunnerName(participant.name);
+        sendAvatars();
+      })
+      .catch(() => {
+        // No avatar yet — the runner's marker just shows an initial.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [errandId, token, sendAvatars]);
+
+  // The page may finish loading before or after the data above arrives.
+  const handlePageLoaded = useCallback(() => {
+    pageReady.current = true;
+    sendAvatars();
+    sendRunner();
+    sendMe();
+  }, [sendAvatars, sendRunner, sendMe]);
+
+  useEffect(() => {
+    sendAvatars(); // e.g. the requester changed their own picture
+  }, [sendAvatars]);
+
+  // This phone's own position, shown as the requester's avatar.
+  useEffect(() => {
+    if (getOwnPosition()) setSharing(true);
+    return subscribeToOwnPosition((position) => {
+      lastMe.current = position;
+      setSharing(true);
+      sendMe();
+    });
+  }, [sendMe]);
+
   const handlePosition = useCallback(
     (position: RunnerPosition) => {
       setHasFirstPosition(true);
-      webviewRef.current?.injectJavaScript(
-        `window.moveRunnerTo && window.moveRunnerTo(${position.latitude}, ${position.longitude}, ${position.heading ?? 0}); true;`
-      );
+      lastRunner.current = position;
+      sendRunner();
 
       if (!legTarget) return;
       const now = Date.now();
@@ -206,7 +188,7 @@ export default function LiveTrackingMap({ errandId, pickup, dropoff, status }: L
           // here rather than surfacing a scary banner over a live map.
         });
     },
-    [legTarget, pickup, dropoff]
+    [legTarget, pickup, dropoff, sendRunner]
   );
 
   useEffect(() => {
@@ -220,14 +202,6 @@ export default function LiveTrackingMap({ errandId, pickup, dropoff, status }: L
     setEta(null);
     lastEtaFetchRef.current = 0;
   }, [legTarget]);
-
-  if (loadError) {
-    return (
-      <View style={[styles.card, styles.centered]}>
-        <Text style={styles.helperText}>Couldn't load the live map right now.</Text>
-      </View>
-    );
-  }
 
   if (!mapHtml) {
     return (
@@ -243,7 +217,13 @@ export default function LiveTrackingMap({ errandId, pickup, dropoff, status }: L
       <Text style={styles.sectionLabel}>{legTarget ? LEG_LABEL[legTarget] : "Runner location"}</Text>
 
       <View style={styles.mapWrapper}>
-        <WebView ref={webviewRef} style={styles.map} originWhitelist={["*"]} source={{ html: mapHtml }} />
+        <WebView
+          ref={webviewRef}
+          style={styles.map}
+          originWhitelist={["*"]}
+          source={{ html: mapHtml }}
+          onLoadEnd={handlePageLoaded}
+        />
         {!hasFirstPosition ? (
           <View style={styles.waitingOverlay} pointerEvents="none">
             <ActivityIndicator color={theme.colors.primary} />
@@ -255,6 +235,11 @@ export default function LiveTrackingMap({ errandId, pickup, dropoff, status }: L
       {eta ? (
         <Text style={styles.etaText}>
           {formatDistance(eta.distanceMeters)} away · about {formatDuration(eta.durationSeconds)}
+        </Text>
+      ) : null}
+      {sharing ? (
+        <Text style={styles.shareNote}>
+          Your location is shared with {runnerName ?? "your runner"} while this errand is active.
         </Text>
       ) : null}
     </View>
@@ -303,6 +288,11 @@ const styles = StyleSheet.create({
     fontFamily: theme.fonts.uiMedium,
     fontSize: 13,
     color: theme.colors.text,
+  },
+  shareNote: {
+    fontFamily: theme.fonts.ui,
+    fontSize: 12,
+    color: theme.colors.textMuted,
   },
   etaText: {
     fontFamily: theme.fonts.uiSemibold,

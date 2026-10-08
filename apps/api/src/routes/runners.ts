@@ -17,6 +17,7 @@ import {
   updatePayoutAccountSchema,
 } from "../schemas/runner";
 import { createVendorDisbursementSchema } from "../schemas/vendor-disbursement";
+import { LIVE_SHARING_STATUSES, getLivePosition } from "../lib/live-positions";
 import { signAuthToken } from "../lib/jwt";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -944,6 +945,24 @@ router.post(
   asyncHandler(async (req, res) => {
     const alert = await resolveSos(parseErrandId(req.params.id), "runner", req.runnerId!);
     res.json({ alert });
+  })
+);
+
+// Where the requester is right now, for the runner's live map. null until
+// the requester's app has reported a position (or if it's gone quiet).
+router.get(
+  "/errands/:id/requester-location",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
+    if (!LIVE_SHARING_STATUSES.has(existing.status)) {
+      res.json({ position: null });
+      return;
+    }
+    const position = getLivePosition(existing.id, "requester");
+    res.json({
+      position: position ? { lat: position.lat, lng: position.lng, heading: position.heading, updatedAt: position.updatedAt } : null,
+    });
   })
 );
 

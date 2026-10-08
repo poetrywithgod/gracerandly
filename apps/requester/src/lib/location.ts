@@ -160,3 +160,23 @@ export async function reverseGeocode(coordinate: Coordinate): Promise<string | u
     return undefined;
   }
 }
+
+// How often the phone reports a fresh position while a runner is on one of
+// the requester's errands (see components/LiveLocationHost.tsx).
+export const LOCATION_UPDATE_INTERVAL_MS = 8000;
+
+/**
+ * Starts watching the device's position and calls `onUpdate` on every fix.
+ * Returns a cleanup function. Throws LocationPermissionDeniedError if the
+ * person declines the permission.
+ */
+export async function watchPosition(onUpdate: (coordinate: Coordinate) => void): Promise<() => void> {
+  const outcome = await ensurePermission("location");
+  if (outcome !== "granted") throw new LocationPermissionDeniedError();
+
+  const subscription = await Location.watchPositionAsync(
+    { accuracy: Location.Accuracy.Balanced, timeInterval: LOCATION_UPDATE_INTERVAL_MS, distanceInterval: 15 },
+    (position) => onUpdate(toCoordinate(position))
+  );
+  return () => subscription.remove();
+}
