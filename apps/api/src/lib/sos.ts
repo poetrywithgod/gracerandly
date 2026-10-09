@@ -4,18 +4,21 @@
  *
  * What an SOS does:
  *  1. Records an alert (sos_alerts) with the triggering person's location.
- *  2. Texts every number in SOS_ALERT_PHONES (comma-separated) with who,
- *     where, and the errand — Gracerandly's own safety contacts.
+ *  2. Texts every number in SOS_ALERT_PHONES and emails every address in
+ *     SOS_ALERT_EMAILS (both comma-separated) with who, where, and the
+ *     errand — Gracerandly's own safety contacts. Either list can be used
+ *     on its own; the two channels go out at the same time.
  *
  * What it deliberately does NOT do: tell the other party on the errand.
  * If the person who feels unsafe is unsafe because of the other party,
  * alerting them would make things worse.
  *
- * Honest delivery reporting: notifiedCount only counts texts that could
- * really have reached a phone. With SMS_PROVIDER=console (the dev default)
- * nothing leaves the server, so the count stays 0 and the apps tell the
- * user to call emergency services themselves rather than implying help
- * has been summoned. See the SOS_ALERT_PHONES notes in .env.example.
+ * Honest delivery reporting: notifiedCount only counts messages (texts and
+ * emails) that could really have reached someone. With SMS_PROVIDER=console
+ * and EMAIL_PROVIDER=console (the dev defaults) nothing leaves the server,
+ * so the count stays 0 and the apps tell the user to call emergency
+ * services themselves rather than implying help has been summoned. See the
+ * SOS_ALERT_PHONES / SOS_ALERT_EMAILS notes in .env.example.
  */
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -23,6 +26,7 @@ import { db } from "../db/client";
 import { errands, requesters, runners, sosAlerts } from "../db/schema";
 import { AppErrors } from "./errors";
 import { smsProvider } from "./sms";
+import { emailProvider } from "./email";
 import type { SosAlert } from "@gracerandly/shared-types";
 
 type Role = "requester" | "runner";
@@ -53,29 +57,61 @@ function alertPhones(): string[] {
     .filter(Boolean);
 }
 
+function alertEmails(): string[] {
+  return (process.env.SOS_ALERT_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean);
+}
+
 function smsIsReal(): boolean {
   return (process.env.SMS_PROVIDER ?? "console") !== "console";
 }
 
-/** Sends `message` to every safety contact. Returns how many sends
- * succeeded *and* could plausibly reach a real phone. Never throws — a
- * failing SMS provider must not stop the alert from being recorded. */
-async function notifySafetyTeam(message: string): Promise<number> {
+function emailIsReal(): boolean {
+  return (process.env.EMAIL_PROVIDER ?? "console") !== "console";
+}
+
+/** What goes to the safety team: a short version for texts and a fuller one
+ * (with a subject line) for email. */
+interface SafetyMessage {
+  sms: string;
+  emailSubject: string;
+  emailBody: string;
+}
+
+/** Sends `message` to every safety contact, by text and by email at the same
+ * time. Returns how many sends succeeded *and* could plausibly reach a real
+ * person. Never throws — a failing provider must not stop the alert from
+ * being recorded. */
+async function notifySafetyTeam(message: SafetyMessage): Promise<number> {
   const phones = alertPhones();
-  if (phones.length === 0) {
-    console.warn("[sos] SOS_ALERT_PHONES is empty — alert recorded but nobody was notified");
+  const emails = alertEmails();
+  if (phones.length === 0 && emails.length === 0) {
+    console.warn("[sos] SOS_ALERT_PHONES and SOS_ALERT_EMAILS are both empty — alert recorded but nobody was notified");
     return 0;
   }
 
-  // All at once, not one after another: a slow or failing text provider must
+  // All at once, not one after another: a slow or failing provider must
   // not make the person holding the panic button wait N times as long.
-  const results = await Promise.allSettled(phones.map((phone) => smsProvider.send(phone, message)));
+  const [smsResults, emailResults] = await Promise.all([
+    Promise.allSettled(phones.map((phone) => smsProvider.send(phone, message.sms))),
+    Promise.allSettled(emails.map((email) => emailProvider.send(email, message.emailSubject, message.emailBody))),
+  ]);
+
   let delivered = 0;
-  results.forEach((result, index) => {
+  smsResults.forEach((result, index) => {
     if (result.status === "fulfilled") {
       if (smsIsReal()) delivered += 1;
     } else {
       console.error(`[sos] failed to text ${phones[index]}`, result.reason);
+    }
+  });
+  emailResults.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      if (emailIsReal()) delivered += 1;
+    } else {
+      console.error(`[sos] failed to email ${emails[index]}`, result.reason);
     }
   });
   return delivered;
@@ -108,7 +144,9 @@ function mapsLink(location: { lat: number; lng: number }): string {
   return `https://maps.google.com/?q=${location.lat},${location.lng}`;
 }
 
-async function describeParties(errand: typeof errands.$inferSelect, role: Role) {
+/** One line per party, the person who pressed SOS first so the most
+ * important line of a short text leads. */
+async function partyLines(errand: typeof errands.$inferSelect, role: Role): Promise<string[]> {
   const [requester] = await db.select().from(requesters).where(eq(requesters.id, errand.requesterId)).limit(1);
   const runner = errand.runnerId
     ? (await db.select().from(runners).where(eq(runners.id, errand.runnerId)).limit(1))[0]
@@ -119,8 +157,46 @@ async function describeParties(errand: typeof errands.$inferSelect, role: Role) 
 
   const requesterText = describe("Requester", requester);
   const runnerText = describe("Runner", runner);
-  // Triggerer first, so the most important line of a short SMS leads.
-  return role === "requester" ? `${requesterText}. ${runnerText}` : `${runnerText}. ${requesterText}`;
+  return role === "requester" ? [requesterText, runnerText] : [runnerText, requesterText];
+}
+
+/** Wall-clock time in Nigeria, for the email. The text message carries no
+ * time: it arrives when it's sent. */
+function lagosTime(date: Date): string {
+  return date.toLocaleString("en-NG", { timeZone: "Africa/Lagos", dateStyle: "medium", timeStyle: "short" });
+}
+
+async function buildSosMessage(
+  errand: typeof errands.$inferSelect,
+  role: Role,
+  location: { lat: number; lng: number }
+): Promise<SafetyMessage> {
+  const lines = await partyLines(errand, role);
+  const shortId = errand.id.slice(0, 8);
+  return {
+    sms: `Gracerandly SOS from the ${role} on errand ${shortId}. ${lines.join(". ")}. Location: ${mapsLink(location)}`,
+    emailSubject: `SOS: ${role} needs help (errand ${shortId})`,
+    emailBody: [
+      `A Gracerandly ${role} pressed the SOS button.`,
+      "",
+      `Time: ${lagosTime(new Date())} (Lagos)`,
+      `Errand: ${errand.id}`,
+      ...lines,
+      `Location: ${mapsLink(location)}`,
+      "",
+      "The other person on the errand has not been told about this alert.",
+    ].join("\n"),
+  };
+}
+
+function buildAllClearMessage(errand: typeof errands.$inferSelect, role: Role): SafetyMessage {
+  const shortId = errand.id.slice(0, 8);
+  const sms = `Gracerandly SOS on errand ${shortId} was marked SAFE by the ${role}.`;
+  return {
+    sms,
+    emailSubject: `SAFE: ${role} cleared the SOS (errand ${shortId})`,
+    emailBody: `${sms}\n\nTime: ${lagosTime(new Date())} (Lagos)\nErrand: ${errand.id}`,
+  };
 }
 
 /** Raises (or refreshes) an SOS for `userId` on `errandId`. Idempotent per
@@ -145,8 +221,7 @@ export async function triggerSos(params: {
     return toSosAlert(row);
   };
 
-  const sosText = async () =>
-    `Gracerandly SOS from the ${role} on errand ${errandId.slice(0, 8)}. ${await describeParties(errand, role)}. Location: ${mapsLink(location)}`;
+  const sosMessage = () => buildSosMessage(errand, role, location);
 
   const existing = await findActiveAlert(errandId, role);
   if (existing) {
@@ -156,9 +231,9 @@ export async function triggerSos(params: {
     if (existing.notifiedCount > 0) return refreshed;
     // Nobody was reached (the text provider was down, or no safety numbers
     // were set up yet). The apps re-send every 30 seconds while an alert is
-    // active, so try the texts again now rather than leaving the alert
-    // stuck at "nobody was told".
-    const retried = await notifySafetyTeam(await sosText());
+    // active, so try the texts and emails again now rather than leaving the
+    // alert stuck at "nobody was told".
+    const retried = await notifySafetyTeam(await sosMessage());
     if (retried === 0) return refreshed;
     const [updated] = await db.update(sosAlerts).set({ notifiedCount: retried }).where(eq(sosAlerts.id, existing.id)).returning();
     return toSosAlert(updated);
@@ -180,7 +255,7 @@ export async function triggerSos(params: {
     throw err;
   }
 
-  const notifiedCount = await notifySafetyTeam(await sosText());
+  const notifiedCount = await notifySafetyTeam(await sosMessage());
   if (notifiedCount === 0) return toSosAlert(created);
 
   const [updated] = await db.update(sosAlerts).set({ notifiedCount }).where(eq(sosAlerts.id, created.id)).returning();
@@ -210,7 +285,7 @@ export async function resolveSos(rawErrandId: unknown, role: Role, userId: strin
   // Fire-and-forget all-clear so the safety team isn't left chasing an
   // alert the person has already closed.
   if (existing.notifiedCount > 0) {
-    void notifySafetyTeam(`Gracerandly SOS on errand ${errand.id.slice(0, 8)} was marked SAFE by the ${role}.`);
+    void notifySafetyTeam(buildAllClearMessage(errand, role));
   }
   return toSosAlert(row);
 }

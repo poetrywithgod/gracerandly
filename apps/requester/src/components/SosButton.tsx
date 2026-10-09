@@ -24,7 +24,7 @@ const EMERGENCY_NUMBER = "112";
 const HOLD_MS = 2000;
 // While an alert is active, keep the safety team's copy of the location
 // fresh. The server treats a repeat press as a location refresh (no repeat
-// texts), so this is cheap.
+// texts or emails), so this is cheap.
 const LOCATION_REFRESH_MS = 30_000;
 
 interface SosButtonProps {
@@ -151,7 +151,7 @@ export default function SosButton({ errandId, token, apiBasePath, otherPartyLabe
         <Text style={styles.body}>
           {reached
             ? "Gracerandly's safety team has been alerted with your location."
-            : `Your SOS was recorded, but we couldn't reach our safety team by text. Call ${EMERGENCY_NUMBER} now.`}
+            : `Your SOS was recorded, but we couldn't reach our safety team. Call ${EMERGENCY_NUMBER} now.`}
         </Text>
         <Button label={`Call ${EMERGENCY_NUMBER}`} variant="danger" onPress={callEmergency} />
         <Button label="I'm safe" variant="ghost" onPress={() => setShowSafeConfirm(true)} />
