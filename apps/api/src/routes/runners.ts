@@ -17,7 +17,8 @@ import {
   updatePayoutAccountSchema,
 } from "../schemas/runner";
 import { createVendorDisbursementSchema } from "../schemas/vendor-disbursement";
-import { LIVE_SHARING_STATUSES, getLivePosition } from "../lib/live-positions";
+import { LIVE_SHARING_STATUSES, getLivePosition, setLivePosition } from "../lib/live-positions";
+import { sharePositionSchema } from "../schemas/location";
 import { submitReviewSchema } from "../schemas/review";
 import { getReviewState, listReviewsAbout, ratingSummaryFor, submitReview } from "../lib/reviews";
 import { signAuthToken } from "../lib/jwt";
@@ -947,6 +948,23 @@ router.post(
   asyncHandler(async (req, res) => {
     const alert = await resolveSos(parseErrandId(req.params.id), "runner", req.runnerId!);
     res.json({ alert });
+  })
+);
+
+// The runner's phone reports where it is on each active errand, so the
+// requester can see them on the map. Read by the requester through
+// GET /errands/:id/runner-location (see lib/live-positions.ts).
+router.post(
+  "/errands/:id/location",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
+    if (!LIVE_SHARING_STATUSES.has(existing.status)) {
+      throw AppErrors.conflict("Location sharing is only on while you're working on this errand");
+    }
+    const position = sharePositionSchema.parse(req.body);
+    setLivePosition(existing.id, "runner", position);
+    res.json({ shared: true });
   })
 );
 

@@ -1,8 +1,7 @@
 /**
  * Identical to apps/requester/src/components/GlassCard.tsx — there's no
  * shared UI package in this monorepo (each app's components are its own
- * copy, same as apps/requester/src/lib/realtime.ts's counterpart in this
- * app), so this is duplicated rather than imported cross-app. Keep the
+ * copy), so this is duplicated rather than imported cross-app. Keep the
  * two in sync by hand if the glass-card look changes.
  */
 import { Platform, StyleSheet, View, ViewStyle } from "react-native";

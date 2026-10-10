@@ -4,18 +4,33 @@ import { WebView } from "react-native-webview";
 import { getTheme } from "@gracerandly/theme";
 import type { GeoPoint, ErrandStatus } from "@gracerandly/shared-types";
 import { useAuth } from "../context/AuthContext";
+import { apiFetch } from "../lib/apiClient";
 import { buildLiveMapHtml } from "../lib/liveMapHtml";
 import { fetchChatParticipant } from "../lib/chatApi";
 import { getOwnPosition, subscribeToOwnPosition, type OwnPosition } from "../lib/liveLocation";
-import { subscribeToRunnerLocation, type RunnerPosition } from "../lib/realtime";
 import { getFastestRouteWithEstimates, getEtaToPoint, formatDistance, formatDuration } from "../lib/routing";
 
 const theme = getTheme("light");
 
+// The runner's position comes from the API (it's only released to the
+// requester on that errand — see apps/api's lib/live-positions.ts), refreshed
+// this often. The runner's phone reports a new fix every ~8 seconds.
+const RUNNER_POLL_INTERVAL_MS = 5000;
+
+interface RunnerPosition {
+  latitude: number;
+  longitude: number;
+  heading?: number;
+}
+
+interface RunnerLocationResponse {
+  position: { lat: number; lng: number; heading?: number } | null;
+}
+
 // OSRM's public router asks for ~1 req/sec fair use — recalculating the
-// "distance/time to next waypoint" on every ~2s position broadcast would
-// eat that budget fast, so only refresh it this often regardless of how
-// frequently positions arrive.
+// "distance/time to next waypoint" on every position update would eat that
+// budget fast, so only refresh it this often regardless of how frequently
+// positions arrive.
 const ETA_RECALC_MIN_INTERVAL_MS = 10000;
 
 // Which waypoint is the runner currently heading toward, by errand status.
@@ -191,10 +206,33 @@ export default function LiveTrackingMap({ errandId, pickup, dropoff, status }: L
     [legTarget, pickup, dropoff, sendRunner]
   );
 
+  // Poll the runner's position. The handler lives in a ref so that it
+  // changing (it depends on the pickup/drop-off and the current leg) doesn't
+  // restart the timer and fire an extra request every time.
+  const handlePositionRef = useRef(handlePosition);
+  handlePositionRef.current = handlePosition;
+
   useEffect(() => {
-    const unsubscribe = subscribeToRunnerLocation(errandId, handlePosition);
-    return unsubscribe;
-  }, [errandId, handlePosition]);
+    if (!token) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const { position } = await apiFetch<RunnerLocationResponse>(`/errands/${errandId}/runner-location`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled || !position) return;
+        handlePositionRef.current({ latitude: position.lat, longitude: position.lng, heading: position.heading });
+      } catch {
+        // Offline or the server is waking up — the next poll tries again.
+      }
+    };
+    poll();
+    const interval = setInterval(poll, RUNNER_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [errandId, token]);
 
   // Reset the ETA once the leg changes (e.g. pickup -> dropoff) so a stale
   // "to pickup" estimate doesn't linger under the "heading to you" label.

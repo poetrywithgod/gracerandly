@@ -100,8 +100,8 @@ export async function getCurrentCoordinate(): Promise<Coordinate> {
 
 // How often the app pushes a fresh position while the runner is online —
 // used both for the "keep the server's currentLocation fresh" PATCH
-// /runners/me/status call and for broadcasting to an active errand's
-// Realtime channel (see lib/realtime.ts). 8s balances battery use against
+// /runners/me/status call and for reporting to the API for each active
+// errand (components/LiveLocationHost.tsx). 8s balances battery use against
 // the requester wanting to see reasonably live movement.
 export const LOCATION_UPDATE_INTERVAL_MS = 8000;
 

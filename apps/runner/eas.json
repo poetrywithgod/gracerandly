@@ -15,9 +15,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://gracerandly.onrender.com",
-        "EXPO_PUBLIC_SUPABASE_URL": "https://xjmigrxmdwlhwszojdll.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqbWlncnhtZHdsaHdzem9qZGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk5MjQzODcsImV4cCI6MjEwNTUwMDM4N30.3LdUm59SmAFiqIVPPBEEJnxtvafJ8Zbu-OJ6WN4OdOQ"
+        "EXPO_PUBLIC_API_URL": "https://gracerandly.onrender.com"
       },
       "channel": "preview"
     },

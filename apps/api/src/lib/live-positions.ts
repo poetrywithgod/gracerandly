@@ -1,13 +1,15 @@
 /**
  * Where each party to an errand last said they were — kept in memory only.
  *
- * The runner's position reaches the requester over Supabase Realtime (see
- * apps/requester/src/lib/realtime.ts). The requester's position goes the
- * other way through THIS store instead of a public Realtime channel,
- * because a requester's live location is more sensitive than a runner's
- * and every runner can see the ids of open errands: here each read and
- * write goes through an authenticated API call that checks the caller is a
- * party to that errand.
+ * Both people's positions travel through THIS store: each phone POSTs its
+ * position (requester: POST /errands/:id/location, runner: POST
+ * /runners/errands/:id/location) and reads the other person's (requester:
+ * GET /errands/:id/runner-location, runner: GET
+ * /runners/errands/:id/requester-location). Every read and write is an
+ * authenticated API call that checks the caller is a party to that errand.
+ * (The runner's position used to go over a public Supabase Realtime channel
+ * named after the errand id — and every runner can see the ids of open
+ * errands, so anyone with the public key could have listened in.)
  *
  * Positions are deliberately not stored in the database: they're only
  * useful for a minute or two, a restart simply means the next update (a few

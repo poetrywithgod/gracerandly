@@ -15,7 +15,7 @@ import { triggerSosSchema } from "../schemas/sos";
 import { sharePositionSchema } from "../schemas/location";
 import { submitReviewSchema } from "../schemas/review";
 import { getReviewState, listReviewsAbout, submitReview } from "../lib/reviews";
-import { LIVE_SHARING_STATUSES, setLivePosition } from "../lib/live-positions";
+import { LIVE_SHARING_STATUSES, getLivePosition, setLivePosition } from "../lib/live-positions";
 import type { Errand, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -313,8 +313,7 @@ router.post(
 
 // The requester's phone reports where they are while a runner is on the
 // errand, so the runner can see them on the map. Read by the runner through
-// GET /runners/errands/:id/requester-location (lib/live-positions.ts says
-// why this isn't a public Realtime channel).
+// GET /runners/errands/:id/requester-location (see lib/live-positions.ts).
 router.post(
   "/:id/location",
   asyncHandler(async (req, res) => {
@@ -325,6 +324,24 @@ router.post(
     const position = sharePositionSchema.parse(req.body);
     setLivePosition(existing.id, "requester", position);
     res.json({ shared: true });
+  })
+);
+
+// Where the runner is right now, for the requester's live map. null until
+// the runner's app has reported a position (or if it's gone quiet), and
+// always null outside the live-sharing statuses.
+router.get(
+  "/:id/runner-location",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    if (!existing.runnerId || !LIVE_SHARING_STATUSES.has(existing.status)) {
+      res.json({ position: null });
+      return;
+    }
+    const position = getLivePosition(existing.id, "runner");
+    res.json({
+      position: position ? { lat: position.lat, lng: position.lng, heading: position.heading, updatedAt: position.updatedAt } : null,
+    });
   })
 );
 

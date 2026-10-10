@@ -6,6 +6,10 @@
  * Usage:
  *   pnpm --filter @gracerandly/api fake-runner -- --errand <errandId>
  *
+ * The errand must already have a runner on it (accept it from the Runner
+ * app or a test runner account first), and the API must be running — set
+ * API_URL if it isn't on http://localhost:4000 (or PORT).
+ *
  * What it does:
  *   1. Loads the errand's pickup/dropoff from the DB.
  *   2. Picks a starting point ~1.5km from pickup (a stand-in for "wherever
@@ -13,9 +17,10 @@
  *      pickup, then pickup to dropoff — from the same OSRM public router
  *      apps/requester/src/lib/routing.ts uses.
  *   3. Walks both legs at a simulated pace, updating the errand's `status`
- *      column directly (there's no real Runner auth/accept flow yet) and
- *      broadcasting {lat, lng, heading} on the Supabase Realtime channel
- *      `runner-location:<errandId>` every tick.
+ *      column directly and reporting {lat, lng, heading} to the API as that
+ *      errand's runner (POST /runners/errands/:id/location, with a token
+ *      signed from JWT_SECRET) every tick — the same call the Runner app
+ *      makes, so the requester's map shows it moving.
  *
  * This is a dev-only stand-in — nothing here should ship as-is. A real
  * Runner app + matching/status-transition API now exists (apps/runner,
@@ -25,10 +30,10 @@
  * point real Runner traffic at the actual app instead.
  */
 import "dotenv/config";
-import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db/client";
 import { errands } from "../src/db/schema";
+import { signAuthToken } from "../src/lib/jwt";
 
 const OSRM_BASE = "https://router.project-osrm.org";
 const TICK_MS = 2000;
@@ -100,7 +105,9 @@ async function setStatus(errandId: string, status: ErrandStatus) {
   console.log(`  status -> ${status}`);
 }
 
-async function walkRoute(route: LatLng[], channel: RealtimeChannel) {
+type ReportPosition = (position: LatLng & { heading: number }) => Promise<void>;
+
+async function walkRoute(route: LatLng[], report: ReportPosition) {
   const metersPerTick = ((SIMULATED_SPEED_KMH * 1000) / 3600) * (TICK_MS / 1000);
   let segmentIndex = 0;
   let position = route[0];
@@ -121,11 +128,7 @@ async function walkRoute(route: LatLng[], channel: RealtimeChannel) {
     }
 
     const heading = headingBetween(position, target);
-    await channel.send({
-      type: "broadcast",
-      event: "position",
-      payload: { lat: position.lat, lng: position.lng, heading, timestamp: Date.now() },
-    });
+    await report({ lat: position.lat, lng: position.lng, heading });
     process.stdout.write(`\r  ${position.lat.toFixed(5)}, ${position.lng.toFixed(5)}  `);
     await new Promise((resolve) => setTimeout(resolve, TICK_MS));
   }
@@ -135,32 +138,35 @@ async function walkRoute(route: LatLng[], channel: RealtimeChannel) {
 async function main() {
   const { errandId, pin } = parseArgs();
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseAnonKey) {
-    console.error(
-      "SUPABASE_URL and SUPABASE_ANON_KEY must be set — copy apps/api/.env.example to apps/api/.env and fill them in."
-    );
-    process.exit(1);
-  }
-
   const [errand] = await db.select().from(errands).where(eq(errands.id, errandId));
   if (!errand) {
     console.error(`No errand found with id ${errandId}`);
     process.exit(1);
   }
+  if (!errand.runnerId) {
+    console.error("This errand has no runner yet — accept it from the Runner app (or a test runner account) first.");
+    process.exit(1);
+  }
+
+  // Report positions the way the Runner app does: an authenticated call to
+  // the API, as this errand's runner.
+  const apiUrl = (process.env.API_URL ?? `http://localhost:${process.env.PORT ?? 4000}`).replace(/\/+$/, "");
+  const runnerToken = signAuthToken({ sub: errand.runnerId, role: "runner" });
+  const report: ReportPosition = async (position) => {
+    const res = await fetch(`${apiUrl}/runners/errands/${errandId}/location`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${runnerToken}` },
+      body: JSON.stringify(position),
+    });
+    if (!res.ok) {
+      const detail = (await res.json().catch(() => ({}))) as { message?: string };
+      throw new Error(`Reporting position failed (HTTP ${res.status}): ${detail.message ?? "no message"}`);
+    }
+  };
 
   const pickup: LatLng = { lat: errand.pickup.lat, lng: errand.pickup.lng };
   const dropoff: LatLng = { lat: errand.dropoff.lat, lng: errand.dropoff.lng };
   const start = fakeStartPoint(pickup);
-
-  const supabase = createClient(supabaseUrl, supabaseAnonKey);
-  const channel = supabase.channel(`runner-location:${errandId}`);
-  await new Promise<void>((resolve) => {
-    channel.subscribe((status) => {
-      if (status === "SUBSCRIBED") resolve();
-    });
-  });
 
   console.log(`Simulating a runner for errand ${errandId}`);
 
@@ -170,7 +176,7 @@ async function main() {
   console.log("Leg 1: heading to pickup");
   await setStatus(errandId, "en_route_to_pickup");
   const toPickup = await fetchOsrmRoute(start, pickup);
-  await walkRoute(toPickup, channel);
+  await walkRoute(toPickup, report);
 
   console.log("Arrived at pickup (pickup-verification gate skipped in this prototype)");
   await setStatus(errandId, "in_progress");
@@ -179,7 +185,7 @@ async function main() {
   console.log("Leg 2: heading to drop-off");
   await setStatus(errandId, "en_route_to_delivery");
   const toDropoff = await fetchOsrmRoute(pickup, dropoff);
-  await walkRoute(toDropoff, channel);
+  await walkRoute(toDropoff, report);
 
   console.log("Arrived at drop-off");
   if (errand.deliveryPin) {
@@ -189,14 +195,12 @@ async function main() {
           pin ? "The --pin you gave doesn't match." : "Rerun with --pin <code>."
         }`
       );
-      await supabase.removeChannel(channel);
       process.exit(1);
     }
     console.log("PIN confirmed");
   }
   await setStatus(errandId, "delivered");
 
-  await supabase.removeChannel(channel);
   process.exit(0);
 }
 
