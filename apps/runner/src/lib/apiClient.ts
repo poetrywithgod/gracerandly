@@ -3,9 +3,19 @@ import { Platform } from "react-native";
 
 const API_PORT = 4000;
 
+// The hosted API. Installed (release) builds always use this unless
+// EXPO_PUBLIC_API_URL says otherwise: over-the-air updates (`eas update`)
+// are bundled without the build profile's env, so without this fallback an
+// update would silently point the app at a local address and every request
+// would fail with "Can't reach the server".
+const HOSTED_API_URL = "https://gracerandly.onrender.com";
+
 function resolveApiBaseUrl(): string {
   const envUrl = process.env.EXPO_PUBLIC_API_URL;
   if (envUrl) return envUrl.replace(/\/+$/, "");
+
+  // Not running from a dev server: use the hosted API (see above).
+  if (!__DEV__) return HOSTED_API_URL;
 
   // Running via `expo start` (Expo Go or a dev client) on a physical
   // device: Metro's own host is reachable over the same LAN, so reuse its
@@ -16,8 +26,7 @@ function resolveApiBaseUrl(): string {
     return `http://${lanHost}:${API_PORT}`;
   }
 
-  // No hostUri (e.g. a standalone/EAS build): fall back to the platform's
-  // usual "talk to my host machine" address.
+  // No hostUri (dev only): fall back to the platform's usual "talk to my host machine" address.
   if (Platform.OS === "android") {
     return `http://10.0.2.2:${API_PORT}`; // Android emulator's alias for the host machine
   }
