@@ -55,6 +55,7 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -84,8 +85,9 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
     if (!step) return;
 
     setError(null);
+    setPinError(undefined);
     if (step.needsPin && !/^\d{4}$/.test(pin)) {
-      setError("Enter the 4-digit delivery PIN the requester gives you");
+      setPinError("Enter the 4-digit delivery PIN the requester gives you");
       return;
     }
 
@@ -111,7 +113,13 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
       // errands are active instead of waiting for its next poll.
       requestLiveLocationRefresh();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't update this errand");
+      // A wrong PIN is about the PIN box, so say it there; everything else
+      // (wrong place, no signal, ...) is about the errand as a whole.
+      if (err instanceof ApiError && err.fields?.pin) {
+        setPinError(err.fields.pin);
+      } else {
+        setError(err instanceof ApiError ? err.message : "Couldn't update this errand");
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -184,10 +192,14 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
         <TextField
           label="Delivery PIN"
           value={pin}
-          onChangeText={setPin}
+          onChangeText={(next) => {
+            setPin(next);
+            setPinError(undefined);
+          }}
           placeholder="4-digit code from the requester"
           keyboardType="number-pad"
           maxLength={4}
+          error={pinError}
         />
       ) : null}
 

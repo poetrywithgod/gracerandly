@@ -20,6 +20,7 @@ import PhoneField, { DEFAULT_COUNTRY, type Country } from "../../components/Phon
 import GenderSelect from "../../components/GenderSelect";
 import Button from "../../components/Button";
 import { useAuth } from "../../context/AuthContext";
+import { ApiError } from "../../lib/apiClient";
 import type { AuthStackParamList } from "../../navigation/types";
 
 const theme = getTheme("light");
@@ -27,6 +28,9 @@ const theme = getTheme("light");
 type Props = NativeStackScreenProps<AuthStackParamList, "Signup">;
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+type ServerField = "fullName" | "phone" | "email" | "password" | "gender";
+const SERVER_FIELDS: ServerField[] = ["fullName", "phone", "email", "password", "gender"];
+
 const MIN_LOCAL_PHONE_DIGITS = 6;
 const MIN_PASSWORD_LENGTH = 6;
 
@@ -53,6 +57,17 @@ export default function SignupScreen({ navigation }: Props) {
 
   const [submitted, setSubmitted] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // Complaints from the server about one specific input (e.g. "an account
+  // with this phone number already exists"), shown under that input until
+  // it's edited.
+  const [serverErrors, setServerErrors] = useState<Partial<Record<ServerField, string>>>({});
+  const clearServerError = useCallback((key: ServerField) => {
+    setServerErrors((prev) => {
+      if (!prev[key]) return prev;
+      const { [key]: _removed, ...rest } = prev;
+      return rest;
+    });
+  }, []);
 
   const fullNameError = useMemo(() => {
     if (!submitted) return undefined;
@@ -118,6 +133,7 @@ export default function SignupScreen({ navigation }: Props) {
   const handleSignup = useCallback(async () => {
     setSubmitted(true);
     setFormError(null);
+    setServerErrors({});
     if (!isFormValid() || !gender) return;
 
     try {
@@ -131,6 +147,17 @@ export default function SignupScreen({ navigation }: Props) {
       // On success, AuthContext flips isAuthenticated and RootNavigator
       // swaps to MainNavigator automatically — nothing to navigate here.
     } catch (err) {
+      if (err instanceof ApiError && err.fields) {
+        // The server named the input(s) at fault — say so under them.
+        const mapped: Partial<Record<ServerField, string>> = {};
+        for (const key of SERVER_FIELDS) {
+          if (err.fields[key]) mapped[key] = err.fields[key];
+        }
+        if (Object.keys(mapped).length > 0) {
+          setServerErrors(mapped);
+          return;
+        }
+      }
       setFormError(err instanceof Error ? err.message : "Sign up failed");
     }
   }, [isFormValid, signUp, fullName, country, localPhone, email, password, gender]);
@@ -175,48 +202,60 @@ export default function SignupScreen({ navigation }: Props) {
             <FloatingLabelInput
               label="Full name"
               value={fullName}
-              onChangeText={setFullName}
+              onChangeText={(value) => {
+                setFullName(value);
+                clearServerError("fullName");
+              }}
               autoCapitalize="words"
               autoComplete="name"
               textContentType="name"
               returnKeyType="next"
-              error={fullNameError}
+              error={fullNameError ?? serverErrors.fullName}
             />
 
             <PhoneField
               value={localPhone}
-              onChangeText={setLocalPhone}
+              onChangeText={(value) => {
+                setLocalPhone(value);
+                clearServerError("phone");
+              }}
               country={country}
               onChangeCountry={setCountry}
               returnKeyType="next"
-              error={phoneError}
+              error={phoneError ?? serverErrors.phone}
             />
 
             <FloatingLabelInput
               label="Email (optional)"
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(value) => {
+                setEmail(value);
+                clearServerError("email");
+              }}
               keyboardType="email-address"
               autoCapitalize="none"
               autoComplete="email"
               textContentType="emailAddress"
               returnKeyType="next"
-              error={emailError}
+              error={emailError ?? serverErrors.email}
             />
 
             <GenderSelect value={gender} onChange={setGender} />
-            {genderError ? <Text style={styles.genderError}>{genderError}</Text> : null}
+            {genderError ?? serverErrors.gender ? <Text style={styles.genderError}>{genderError ?? serverErrors.gender}</Text> : null}
 
             <FloatingLabelInput
               label="Password"
               value={password}
-              onChangeText={setPassword}
+              onChangeText={(value) => {
+                setPassword(value);
+                clearServerError("password");
+              }}
               isPassword
               autoCapitalize="none"
               autoComplete="password-new"
               textContentType="newPassword"
               returnKeyType="next"
-              error={passwordError}
+              error={passwordError ?? serverErrors.password}
             />
 
             <FloatingLabelInput

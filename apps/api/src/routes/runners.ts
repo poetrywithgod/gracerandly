@@ -201,8 +201,9 @@ router.post(
 
     if (existing.length > 0) {
       const clash = existing[0];
-      const field = clash.phone === input.phone ? "phone number" : "email";
-      throw AppErrors.conflict(`An account with this ${field} already exists`);
+      const isPhone = clash.phone === input.phone;
+      const message = `An account with this ${isPhone ? "phone number" : "email"} already exists`;
+      throw AppErrors.conflict(message, { [isPhone ? "phone" : "email"]: message });
     }
 
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_SALT_ROUNDS);
@@ -268,7 +269,7 @@ router.patch(
         .where(eq(runners.email, input.email))
         .limit(1);
       if (clash.length > 0 && clash[0].id !== req.runnerId) {
-        throw AppErrors.conflict("An account with this email already exists");
+        throw AppErrors.conflict("An account with this email already exists", { email: "An account with this email already exists" });
       }
     }
 
@@ -324,9 +325,8 @@ router.patch(
 
     const bank = await resolveBankCode(input.bankName);
     if (!bank) {
-      throw AppErrors.validation(
-        `We don't recognize "${input.bankName}" as a bank — check the spelling and try again`
-      );
+      const message = `We don't recognize "${input.bankName}" as a bank — check the spelling and try again`;
+      throw AppErrors.validation(message, { bankName: message });
     }
 
     let accountName = input.accountName;
@@ -730,7 +730,8 @@ router.patch(
         throw AppErrors.conflict("This errand has no delivery PIN on file");
       }
       if (!input.pin || input.pin !== existing.deliveryPin) {
-        throw AppErrors.unauthorized("That PIN doesn't match — ask the requester to read it out again");
+        const message = "That PIN doesn't match — ask the requester to read it out again";
+        throw AppErrors.unauthorized(message, { pin: message });
       }
     }
 

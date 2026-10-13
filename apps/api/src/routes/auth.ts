@@ -66,8 +66,9 @@ router.post(
 
     if (existing.length > 0) {
       const clash = existing[0];
-      const field = clash.phone === input.phone ? "phone number" : "email";
-      throw AppErrors.conflict(`An account with this ${field} already exists`);
+      const isPhone = clash.phone === input.phone;
+      const message = `An account with this ${isPhone ? "phone number" : "email"} already exists`;
+      throw AppErrors.conflict(message, { [isPhone ? "phone" : "email"]: message });
     }
 
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_SALT_ROUNDS);
@@ -168,7 +169,7 @@ router.patch(
         .where(eq(requesters.email, input.email))
         .limit(1);
       if (clash.length > 0 && clash[0].id !== req.requesterId) {
-        throw AppErrors.conflict("An account with this email already exists");
+        throw AppErrors.conflict("An account with this email already exists", { email: "An account with this email already exists" });
       }
       emailChanged = input.email !== current.email;
     }

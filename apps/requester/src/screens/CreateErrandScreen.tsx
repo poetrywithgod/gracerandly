@@ -41,6 +41,19 @@ const URGENCY_OPTIONS: { value: ErrandUrgency; label: string }[] = [
   { value: "scheduled", label: "Scheduled" },
 ];
 
+// Server-side input names (the first part of a validation path such as
+// "pickup.lat") that have a message slot on this screen.
+const SERVER_ERROR_TARGETS = new Set([
+  "category",
+  "urgency",
+  "scheduledFor",
+  "recurrenceRule",
+  "pickup",
+  "dropoff",
+  "items",
+  "estimatedCost",
+]);
+
 type RepeatMode = "once" | "repeat";
 
 const REPEAT_MODE_OPTIONS: { value: RepeatMode; label: string }[] = [
@@ -109,6 +122,8 @@ export default function CreateErrandScreen() {
   const [repeatMode, setRepeatMode] = useState<RepeatMode>("once");
   const [recurrenceRule, setRecurrenceRule] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // Server complaints about one specific item row, keyed by the row's key.
+  const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -158,6 +173,11 @@ export default function CreateErrandScreen() {
   }, [isEditMode, errandId, token]);
 
   function updateItem(key: string, patch: Partial<DraftItem>) {
+    setItemErrors((prev) => {
+      if (!prev[key]) return prev;
+      const { [key]: _cleared, ...rest } = prev;
+      return rest;
+    });
     setItems((prev) => prev.map((item) => (item.key === key ? { ...item, ...patch } : item)));
   }
 
@@ -214,7 +234,11 @@ export default function CreateErrandScreen() {
     if (!validate() || !category || !urgency || !pickup || !dropoff) return;
 
     setSubmitError(null);
+    setItemErrors({});
     setIsSubmitting(true);
+    // Rows left blank aren't sent, so the server's "items.2.name" means the
+    // third *sent* row — remember which on-screen row that was.
+    const sentItemKeys = items.filter((item) => item.name.trim().length > 0).map((item) => item.key);
     try {
       const payload = {
         category,
@@ -244,6 +268,26 @@ export default function CreateErrandScreen() {
 
       setShowSuccessModal(true);
     } catch (err) {
+      if (err instanceof ApiError && err.fields) {
+        // The server named the input(s) at fault — say so under them.
+        const nextErrors: Record<string, string> = {};
+        const nextItemErrors: Record<string, string> = {};
+        for (const [path, message] of Object.entries(err.fields)) {
+          const itemMatch = /^items\.(\d+)\./.exec(path);
+          if (itemMatch) {
+            const key = sentItemKeys[Number(itemMatch[1])];
+            if (key && !nextItemErrors[key]) nextItemErrors[key] = message;
+            continue;
+          }
+          const target = path.split(".")[0];
+          if (SERVER_ERROR_TARGETS.has(target) && !nextErrors[target]) nextErrors[target] = message;
+        }
+        if (Object.keys(nextErrors).length > 0 || Object.keys(nextItemErrors).length > 0) {
+          setErrors(nextErrors);
+          setItemErrors(nextItemErrors);
+          return;
+        }
+      }
       setSubmitError(err instanceof ApiError ? err.message : "Something went wrong");
     } finally {
       setIsSubmitting(false);
@@ -424,6 +468,7 @@ export default function CreateErrandScreen() {
                   value={item.name}
                   onChangeText={(name) => updateItem(item.key, { name })}
                   placeholder="e.g. Bread"
+                  error={itemErrors[item.key]}
                 />
               </View>
               <View style={styles.itemQtyField}>

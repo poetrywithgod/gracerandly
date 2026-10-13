@@ -62,6 +62,22 @@ interface EarningsResponse {
   completedErrandsCount: number;
 }
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+type ProfileField = "fullName" | "email";
+const PROFILE_FIELDS: ProfileField[] = ["fullName", "email"];
+type PayoutField = "bankName" | "accountNumber" | "accountName";
+const PAYOUT_FIELDS: PayoutField[] = ["bankName", "accountNumber", "accountName"];
+
+/** The server's per-input messages for `keys`, or null if it named none of them. */
+function pickFields<K extends string>(err: unknown, keys: K[]): Partial<Record<K, string>> | null {
+  if (!(err instanceof ApiError) || !err.fields) return null;
+  const picked: Partial<Record<K, string>> = {};
+  for (const key of keys) {
+    if (err.fields[key]) picked[key] = err.fields[key];
+  }
+  return Object.keys(picked).length > 0 ? picked : null;
+}
+
 function formatNaira(amount: number): string {
   return `\u20a6${amount.toLocaleString("en-NG")}`;
 }
@@ -85,6 +101,10 @@ export default function ProfileScreen() {
   const [vehicleType, setVehicleType] = useState<VehicleType | null>(user?.vehicleType ?? null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  // Errors under one specific input (a client check, or the server naming
+  // the input at fault) for the profile form and the payout-account form.
+  const [profileFieldErrors, setProfileFieldErrors] = useState<Partial<Record<ProfileField, string>>>({});
+  const [payoutFieldErrors, setPayoutFieldErrors] = useState<Partial<Record<PayoutField, string>>>({});
 
   // --- Avatar ---
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
@@ -160,14 +180,16 @@ export default function ProfileScreen() {
     setEmail(user?.email ?? "");
     setVehicleType(user?.vehicleType ?? null);
     setProfileError(null);
+    setProfileFieldErrors({});
     setIsEditing(true);
   }
 
   async function handleSaveProfile() {
-    if (fullName.trim().length < 2) {
-      setProfileError("Full name is required");
-      return;
-    }
+    const found: Partial<Record<ProfileField, string>> = {};
+    if (fullName.trim().length < 2) found.fullName = "Enter your full name";
+    if (email.trim() && !EMAIL_REGEX.test(email.trim())) found.email = "Enter a valid email address";
+    setProfileFieldErrors(found);
+    if (Object.keys(found).length > 0) return;
     setProfileError(null);
     setIsSavingProfile(true);
     try {
@@ -178,6 +200,11 @@ export default function ProfileScreen() {
       });
       setIsEditing(false);
     } catch (err) {
+      const mapped = pickFields(err, PROFILE_FIELDS);
+      if (mapped) {
+        setProfileFieldErrors(mapped);
+        return;
+      }
       setProfileError(err instanceof ApiError ? err.message : "Couldn't save changes");
     } finally {
       setIsSavingProfile(false);
@@ -202,14 +229,17 @@ export default function ProfileScreen() {
     setAccountNumber(user?.payoutAccount?.accountNumber ?? "");
     setAccountName(user?.payoutAccount?.accountName ?? "");
     setPayoutError(null);
+    setPayoutFieldErrors({});
     setIsEditingPayout(true);
   }
 
   async function handleSavePayout() {
-    if (bankName.trim().length < 2 || !/^\d{10}$/.test(accountNumber) || accountName.trim().length < 2) {
-      setPayoutError("Fill in a bank name, 10-digit account number, and account name");
-      return;
-    }
+    const found: Partial<Record<PayoutField, string>> = {};
+    if (bankName.trim().length < 2) found.bankName = "Enter your bank's name";
+    if (!/^\d{10}$/.test(accountNumber)) found.accountNumber = "Enter your 10-digit account number";
+    if (accountName.trim().length < 2) found.accountName = "Enter the name on the account";
+    setPayoutFieldErrors(found);
+    if (Object.keys(found).length > 0) return;
     setPayoutError(null);
     setIsSavingPayout(true);
     try {
@@ -220,6 +250,11 @@ export default function ProfileScreen() {
       });
       setIsEditingPayout(false);
     } catch (err) {
+      const mapped = pickFields(err, PAYOUT_FIELDS);
+      if (mapped) {
+        setPayoutFieldErrors(mapped);
+        return;
+      }
       setPayoutError(err instanceof ApiError ? err.message : "Couldn't save payout details");
     } finally {
       setIsSavingPayout(false);
@@ -273,8 +308,27 @@ export default function ProfileScreen() {
 
       {isEditing ? (
         <View style={styles.editForm}>
-          <TextField label="Full name" value={fullName} onChangeText={setFullName} autoCapitalize="words" />
-          <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+          <TextField
+            label="Full name"
+            value={fullName}
+            onChangeText={(value) => {
+              setFullName(value);
+              setProfileFieldErrors(({ fullName: _cleared, ...rest }) => rest);
+            }}
+            autoCapitalize="words"
+            error={profileFieldErrors.fullName}
+          />
+          <TextField
+            label="Email"
+            value={email}
+            onChangeText={(value) => {
+              setEmail(value);
+              setProfileFieldErrors(({ email: _cleared, ...rest }) => rest);
+            }}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            error={profileFieldErrors.email}
+          />
           <PillSelect label="Vehicle" options={VEHICLE_OPTIONS} value={vehicleType} onChange={setVehicleType} />
           {profileError ? <Text style={styles.errorText}>{profileError}</Text> : null}
           <View style={styles.editActions}>
@@ -352,16 +406,38 @@ export default function ProfileScreen() {
 
           {isEditingPayout ? (
             <View style={styles.editForm}>
-              <TextField label="Bank name" value={bankName} onChangeText={setBankName} placeholder="e.g. GTBank" />
+              <TextField
+                label="Bank name"
+                value={bankName}
+                onChangeText={(value) => {
+                  setBankName(value);
+                  setPayoutFieldErrors(({ bankName: _cleared, ...rest }) => rest);
+                }}
+                placeholder="e.g. GTBank"
+                error={payoutFieldErrors.bankName}
+              />
               <TextField
                 label="Account number"
                 value={accountNumber}
-                onChangeText={setAccountNumber}
+                onChangeText={(value) => {
+                  setAccountNumber(value);
+                  setPayoutFieldErrors(({ accountNumber: _cleared, ...rest }) => rest);
+                }}
                 placeholder="10-digit NUBAN"
                 keyboardType="number-pad"
                 maxLength={10}
+                error={payoutFieldErrors.accountNumber}
               />
-              <TextField label="Account name" value={accountName} onChangeText={setAccountName} placeholder="Name on the account" />
+              <TextField
+                label="Account name"
+                value={accountName}
+                onChangeText={(value) => {
+                  setAccountName(value);
+                  setPayoutFieldErrors(({ accountName: _cleared, ...rest }) => rest);
+                }}
+                placeholder="Name on the account"
+                error={payoutFieldErrors.accountName}
+              />
               {payoutError ? <Text style={styles.errorText}>{payoutError}</Text> : null}
               <View style={styles.editActions}>
                 <Button label="Cancel" variant="ghost" onPress={() => setIsEditingPayout(false)} style={styles.editActionButton} />

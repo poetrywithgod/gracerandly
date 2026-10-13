@@ -33,7 +33,10 @@ export default function VerificationModal({
   const [isSending, setIsSending] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [code, setCode] = useState("");
+  // Problems with sending the code (or the connection) vs. problems with the
+  // code the person typed — the latter belongs under the code box.
   const [error, setError] = useState<string | null>(null);
+  const [codeError, setCodeError] = useState<string | undefined>(undefined);
   const [devCode, setDevCode] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
   const hasSentRef = useRef(false);
@@ -44,6 +47,7 @@ export default function VerificationModal({
       hasSentRef.current = false;
       setCode("");
       setError(null);
+      setCodeError(undefined);
       setDevCode(null);
       setCooldown(0);
       return;
@@ -77,16 +81,22 @@ export default function VerificationModal({
 
   async function handleConfirm() {
     if (code.length !== 6) {
-      setError("Enter the 6-digit code");
+      setCodeError("Enter the 6-digit code");
       return;
     }
     setIsConfirming(true);
     setError(null);
+    setCodeError(undefined);
     try {
       await confirmVerification(channel, code);
       onVerified();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't verify that code");
+      // status 0 = couldn't reach the server — that's not the code's fault.
+      if (err instanceof ApiError && err.status !== 0) {
+        setCodeError(err.message);
+      } else {
+        setError(err instanceof ApiError ? err.message : "Couldn't verify that code");
+      }
     } finally {
       setIsConfirming(false);
     }
@@ -118,11 +128,15 @@ export default function VerificationModal({
           <TextField
             label="Verification code"
             value={code}
-            onChangeText={(text) => setCode(text.replace(/\D/g, "").slice(0, 6))}
+            onChangeText={(text) => {
+              setCode(text.replace(/\D/g, "").slice(0, 6));
+              setCodeError(undefined);
+            }}
             keyboardType="number-pad"
             maxLength={6}
             placeholder="123456"
             editable={!isSending}
+            error={codeError}
           />
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}

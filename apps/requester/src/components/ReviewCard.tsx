@@ -45,6 +45,9 @@ export default function ReviewCard({ errandId }: { errandId: string }) {
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The star row and the comment box each get their own message.
+  const [ratingError, setRatingError] = useState<string | null>(null);
+  const [commentError, setCommentError] = useState<string | undefined>(undefined);
   const [showReviews, setShowReviews] = useState(false);
 
   const load = useCallback(async () => {
@@ -61,11 +64,13 @@ export default function ReviewCard({ errandId }: { errandId: string }) {
 
   const submit = async () => {
     if (rating < 1) {
-      setError("Tap a star to choose a rating.");
+      setRatingError("Tap a star to choose a rating.");
       return;
     }
     setSubmitting(true);
     setError(null);
+    setRatingError(null);
+    setCommentError(undefined);
     try {
       const next = await apiFetch<ReviewState>(path, {
         method: "POST",
@@ -74,6 +79,11 @@ export default function ReviewCard({ errandId }: { errandId: string }) {
       });
       setState(next);
     } catch (err) {
+      if (err instanceof ApiError && (err.fields?.rating || err.fields?.comment)) {
+        if (err.fields.rating) setRatingError(err.fields.rating);
+        if (err.fields.comment) setCommentError(err.fields.comment);
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "Couldn't save your rating. Please try again.");
     } finally {
       setSubmitting(false);
@@ -104,11 +114,22 @@ export default function ReviewCard({ errandId }: { errandId: string }) {
         <>
           <Text style={styles.title}>Rate the runner</Text>
           {count > 0 ? seeReviews : null}
-          <Stars value={rating} onChange={setRating} />
+          <Stars
+            value={rating}
+            onChange={(value) => {
+              setRating(value);
+              setRatingError(null);
+            }}
+          />
+          {ratingError ? <Text style={styles.error}>{ratingError}</Text> : null}
           <TextField
             label="Comment (optional)"
             value={comment}
-            onChangeText={setComment}
+            error={commentError}
+            onChangeText={(value) => {
+              setComment(value);
+              setCommentError(undefined);
+            }}
             multiline
             maxLength={500}
             placeholder="How did it go?"

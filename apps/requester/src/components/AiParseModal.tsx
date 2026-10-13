@@ -27,14 +27,18 @@ export default function AiParseModal({ visible, onClose, onParsed }: AiParseModa
   const [text, setText] = useState("");
   const [isParsing, setIsParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Problems with what the person typed go under the box; "the AI service
+  // is down" and similar go in the general message below it.
+  const [textError, setTextError] = useState<string | undefined>(undefined);
 
   async function handleParse() {
     if (text.trim().length < 3) {
-      setError("Add a bit more detail");
+      setTextError("Add a bit more detail");
       return;
     }
     setIsParsing(true);
     setError(null);
+    setTextError(undefined);
     try {
       const { draft } = await apiFetch<{ draft: AiParsedDraft }>("/errands/parse", {
         method: "POST",
@@ -44,6 +48,10 @@ export default function AiParseModal({ visible, onClose, onParsed }: AiParseModa
       onParsed(draft);
       setText("");
     } catch (err) {
+      if (err instanceof ApiError && err.fields?.text) {
+        setTextError(err.fields.text);
+        return;
+      }
       setError(
         err instanceof ApiError ? err.message : "Couldn't parse that — try filling the form manually"
       );
@@ -74,11 +82,15 @@ export default function AiParseModal({ visible, onClose, onParsed }: AiParseModa
           <TextField
             label="What do you need?"
             value={text}
-            onChangeText={setText}
+            onChangeText={(value) => {
+              setText(value);
+              setTextError(undefined);
+            }}
             multiline
             numberOfLines={4}
             placeholder="e.g. 2 loaves of bread, a bag of rice, toothpaste. It's urgent, call me when you arrive"
             editable={!isParsing}
+            error={textError}
           />
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}

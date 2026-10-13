@@ -53,6 +53,9 @@ const STATUS_COLORS: Record<RequesterStatus, string> = {
 };
 
 const MAX_BIO_LENGTH = 280;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+type ProfileField = "fullName" | "email" | "bio";
+const PROFILE_FIELDS: ProfileField[] = ["fullName", "email", "bio"];
 
 function formatMemberSince(iso: string): string {
   return new Date(iso).toLocaleDateString("en-NG", { month: "long", year: "numeric" });
@@ -72,6 +75,15 @@ export default function ProfileScreen() {
   const [bio, setBio] = useState(user?.bio ?? "");
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // Errors under one specific input of the edit form (client check or the
+  // server naming the input at fault).
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<ProfileField, string>>>({});
+  const clearFieldError = (key: ProfileField) =>
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const { [key]: _removed, ...rest } = prev;
+      return rest;
+    });
 
   const [isSavingStatus, setIsSavingStatus] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -133,14 +145,16 @@ export default function ProfileScreen() {
     setGender(user?.gender ?? null);
     setBio(user?.bio ?? "");
     setFormError(null);
+    setFieldErrors({});
     setIsEditing(true);
   }
 
   async function handleSave() {
-    if (fullName.trim().length < 2) {
-      setFormError("Full name is required");
-      return;
-    }
+    const found: Partial<Record<ProfileField, string>> = {};
+    if (fullName.trim().length < 2) found.fullName = "Enter your full name";
+    if (email.trim() && !EMAIL_REGEX.test(email.trim())) found.email = "Enter a valid email address";
+    setFieldErrors(found);
+    if (Object.keys(found).length > 0) return;
     setFormError(null);
     setIsSaving(true);
     try {
@@ -152,6 +166,16 @@ export default function ProfileScreen() {
       });
       setIsEditing(false);
     } catch (err) {
+      if (err instanceof ApiError && err.fields) {
+        const mapped: Partial<Record<ProfileField, string>> = {};
+        for (const key of PROFILE_FIELDS) {
+          if (err.fields[key]) mapped[key] = err.fields[key];
+        }
+        if (Object.keys(mapped).length > 0) {
+          setFieldErrors(mapped);
+          return;
+        }
+      }
       setFormError(err instanceof ApiError ? err.message : "Couldn't save changes");
     } finally {
       setIsSaving(false);
@@ -219,15 +243,23 @@ export default function ProfileScreen() {
           <TextField
             label="Full name"
             value={fullName}
-            onChangeText={setFullName}
+            onChangeText={(value) => {
+              setFullName(value);
+              clearFieldError("fullName");
+            }}
             autoCapitalize="words"
+            error={fieldErrors.fullName}
           />
           <TextField
             label="Email"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(value) => {
+              setEmail(value);
+              clearFieldError("email");
+            }}
             keyboardType="email-address"
             autoCapitalize="none"
+            error={fieldErrors.email}
           />
           <PillSelect
             label="Gender"
@@ -238,7 +270,11 @@ export default function ProfileScreen() {
           <TextField
             label={`Bio (${bio.length}/${MAX_BIO_LENGTH})`}
             value={bio}
-            onChangeText={(text) => setBio(text.slice(0, MAX_BIO_LENGTH))}
+            onChangeText={(text) => {
+              setBio(text.slice(0, MAX_BIO_LENGTH));
+              clearFieldError("bio");
+            }}
+            error={fieldErrors.bio}
             multiline
             numberOfLines={3}
             placeholder="Tell runners a bit about yourself"
