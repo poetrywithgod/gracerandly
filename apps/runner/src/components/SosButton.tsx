@@ -23,8 +23,9 @@ const theme = getTheme("light");
 const EMERGENCY_NUMBER = "112";
 const HOLD_MS = 2000;
 // While an alert is active, keep the safety team's copy of the location
-// fresh. The server treats a repeat press as a location refresh (no repeat
-// texts or emails), so this is cheap.
+// fresh. The server treats a repeat press as a location refresh — it doesn't
+// repeat the original alert, and only sends the team a follow-up when you've
+// moved a fair distance (rate-limited) — so this is cheap.
 const LOCATION_REFRESH_MS = 30_000;
 
 interface SosButtonProps {
@@ -78,8 +79,12 @@ export default function SosButton({ errandId, token, apiBasePath, otherPartyLabe
           body: JSON.stringify({ lat: coordinate.latitude, lng: coordinate.longitude }),
         });
         setAlert(response.alert);
-      } catch {
-        // Best effort — the original alert is already recorded.
+      } catch (err) {
+        // The server closes an SOS that went stale (long after delivery, or
+        // simply too old) and then refuses refreshes with 409 — stop showing
+        // it as active. Any other failure is best effort: the original
+        // alert is already recorded.
+        if (err instanceof ApiError && err.status === 409) setAlert(null);
       }
     }, LOCATION_REFRESH_MS);
     return () => clearInterval(interval);

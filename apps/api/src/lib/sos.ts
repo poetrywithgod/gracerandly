@@ -9,6 +9,12 @@
  *     errand — Gracerandly's own safety contacts. Either list can be used
  *     on its own; the two channels go out at the same time.
  *
+ *  3. While the alert stays active and the person moves, sends the safety
+ *     team follow-up locations (rate-limited and capped — see UPDATE_* below)
+ *     so they aren't chasing a stale first position.
+ *  4. Closes alerts that went stale (a long time after the errand ended, or
+ *     simply too old) and tells the safety team it was NOT confirmed safe.
+ *
  * What it deliberately does NOT do: tell the other party on the errand.
  * If the person who feels unsafe is unsafe because of the other party,
  * alerting them would make things worse.
@@ -20,7 +26,7 @@
  * services themselves rather than implying help has been summoned. See the
  * SOS_ALERT_PHONES / SOS_ALERT_EMAILS notes in .env.example.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
 import { errands, requesters, runners, sosAlerts } from "../db/schema";
@@ -30,6 +36,21 @@ import { emailProvider } from "./email";
 import type { SosAlert } from "@gracerandly/shared-types";
 
 type Role = "requester" | "runner";
+
+// Follow-up locations to the safety team: at most one per 2 minutes, only
+// once the person has moved at least 100 m since the last one, and at most
+// 30 per alert (about an hour of continuous movement) — texts cost money
+// and a flood of near-identical messages is hard to act on.
+const UPDATE_MIN_INTERVAL_MS = 2 * 60 * 1000;
+const UPDATE_MIN_DISTANCE_M = 100;
+const MAX_UPDATES = 30;
+
+// SOS can still be raised for 2 hours after delivery (an incident can
+// happen at hand-off or right after). Errands have no separate delivered-at
+// column, so the errand's updatedAt — last touched by the delivery — stands in.
+const POST_DELIVERY_WINDOW_MS = 2 * 60 * 60 * 1000;
+// An alert still "active" after this long is closed by the server.
+const ALERT_MAX_AGE_MS = 8 * 60 * 60 * 1000;
 
 // Same window as chat: a runner's attached, through delivery (an incident
 // can still happen at hand-off, so "delivered" counts).
@@ -199,6 +220,111 @@ function buildAllClearMessage(errand: typeof errands.$inferSelect, role: Role): 
   };
 }
 
+function buildUpdateMessage(errand: typeof errands.$inferSelect, role: Role, location: { lat: number; lng: number }): SafetyMessage {
+  const shortId = errand.id.slice(0, 8);
+  const sms = `Gracerandly SOS UPDATE, errand ${shortId}: the ${role} has moved. Now: ${mapsLink(location)}`;
+  return {
+    sms,
+    emailSubject: `SOS update: ${role} moved (errand ${shortId})`,
+    emailBody: `${sms}\n\nTime: ${lagosTime(new Date())} (Lagos)\nErrand: ${errand.id}\n\nThe SOS is still active — the ${role} has not marked themselves safe.`,
+  };
+}
+
+function buildAutoClosedMessage(errand: typeof errands.$inferSelect, role: Role): SafetyMessage {
+  const shortId = errand.id.slice(0, 8);
+  const sms = `Gracerandly SOS on errand ${shortId} was closed automatically. The ${role} did NOT confirm they are safe — please check on them.`;
+  return {
+    sms,
+    emailSubject: `SOS closed automatically, not confirmed safe (errand ${shortId})`,
+    emailBody: `${sms}\n\nTime: ${lagosTime(new Date())} (Lagos)\nErrand: ${errand.id}`,
+  };
+}
+
+function distanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/** True once the errand was delivered more than POST_DELIVERY_WINDOW_MS ago. */
+function deliveryWindowEnded(errand: typeof errands.$inferSelect, now: number): boolean {
+  return errand.status === "delivered" && now - errand.updatedAt.getTime() >= POST_DELIVERY_WINDOW_MS;
+}
+
+function isStale(alert: typeof sosAlerts.$inferSelect, errand: typeof errands.$inferSelect, now: number): boolean {
+  return now - alert.createdAt.getTime() >= ALERT_MAX_AGE_MS || deliveryWindowEnded(errand, now);
+}
+
+/** Closes a stale alert. The status condition makes it safe if two requests
+ * (or the sweep) get here together: only the one that really closes it tells
+ * the safety team. Returns whether this call closed it. */
+async function autoCloseAlert(errand: typeof errands.$inferSelect, alert: typeof sosAlerts.$inferSelect): Promise<boolean> {
+  const [closed] = await db
+    .update(sosAlerts)
+    .set({ status: "resolved", resolvedAt: new Date(), resolvedBy: "auto" })
+    .where(and(eq(sosAlerts.id, alert.id), eq(sosAlerts.status, "active")))
+    .returning();
+  if (!closed) return false;
+  // Only worth telling the team about if they were told about the alert.
+  if (alert.notifiedCount > 0) void notifySafetyTeam(buildAutoClosedMessage(errand, alert.triggeredByRole));
+  return true;
+}
+
+/** Sends a follow-up location if the person has moved and enough time has
+ * passed. Claims the slot in the database first, so two simultaneous
+ * refreshes can't both send. Never throws. */
+async function maybeSendLocationUpdate(
+  errand: typeof errands.$inferSelect,
+  role: Role,
+  existing: typeof sosAlerts.$inferSelect,
+  location: { lat: number; lng: number }
+): Promise<void> {
+  try {
+    if (existing.updateCount >= MAX_UPDATES) return;
+    const lastSent = existing.lastUpdateLocation ?? existing.location;
+    if (distanceMeters(lastSent, location) < UPDATE_MIN_DISTANCE_M) return;
+
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - UPDATE_MIN_INTERVAL_MS);
+    const [claimed] = await db
+      .update(sosAlerts)
+      .set({ lastUpdateSentAt: now, lastUpdateLocation: location, updateCount: sql`${sosAlerts.updateCount} + 1` })
+      .where(
+        and(
+          eq(sosAlerts.id, existing.id),
+          eq(sosAlerts.status, "active"),
+          lt(sosAlerts.updateCount, MAX_UPDATES),
+          or(isNull(sosAlerts.lastUpdateSentAt), lt(sosAlerts.lastUpdateSentAt, cutoff))
+        )
+      )
+      .returning();
+    if (!claimed) return;
+    await notifySafetyTeam(buildUpdateMessage(errand, role, location));
+  } catch (err) {
+    console.error("[sos] couldn't send a location update", err);
+  }
+}
+
+/** Closes every active alert that has gone stale. Run on a timer (see
+ * server.ts); requests also close stale alerts as they touch them, which
+ * covers a server that was asleep. */
+export async function expireStaleAlerts(): Promise<number> {
+  const rows = await db
+    .select({ alert: sosAlerts, errand: errands })
+    .from(sosAlerts)
+    .innerJoin(errands, eq(errands.id, sosAlerts.errandId))
+    .where(eq(sosAlerts.status, "active"));
+  const now = Date.now();
+  let closed = 0;
+  for (const { alert, errand } of rows) {
+    if (isStale(alert, errand, now) && (await autoCloseAlert(errand, alert))) closed += 1;
+  }
+  return closed;
+}
+
 /** Raises (or refreshes) an SOS for `userId` on `errandId`. Idempotent per
  * (errand, person): pressing again while an alert is active just refreshes
  * its location and does not re-text the safety team — unless nobody was
@@ -216,6 +342,17 @@ export async function triggerSos(params: {
     throw AppErrors.conflict("SOS is only available while a runner is attached to the errand");
   }
 
+  // An alert that went stale is closed first; a stale one on an errand
+  // delivered long ago also means a new SOS can't be raised.
+  let existing: typeof sosAlerts.$inferSelect | undefined = await findActiveAlert(errandId, role);
+  if (existing && isStale(existing, errand, Date.now())) {
+    await autoCloseAlert(errand, existing);
+    existing = undefined;
+  }
+  if (deliveryWindowEnded(errand, Date.now())) {
+    throw AppErrors.conflict("SOS is only available during the errand and for 2 hours after delivery");
+  }
+
   const refresh = async (existingId: string) => {
     const [row] = await db.update(sosAlerts).set({ location }).where(eq(sosAlerts.id, existingId)).returning();
     return toSosAlert(row);
@@ -223,19 +360,26 @@ export async function triggerSos(params: {
 
   const sosMessage = () => buildSosMessage(errand, role, location);
 
-  const existing = await findActiveAlert(errandId, role);
   if (existing) {
     const refreshed = await refresh(existing.id);
-    // Someone was reached last time: a repeat press is just a location
-    // refresh (no repeat texts).
-    if (existing.notifiedCount > 0) return refreshed;
+    // Someone was reached last time: a repeat press is a location refresh,
+    // plus a follow-up to the safety team if the person has moved (no
+    // repeat of the original alert).
+    if (existing.notifiedCount > 0) {
+      void maybeSendLocationUpdate(errand, role, existing, location);
+      return refreshed;
+    }
     // Nobody was reached (the text provider was down, or no safety numbers
     // were set up yet). The apps re-send every 30 seconds while an alert is
     // active, so try the texts and emails again now rather than leaving the
     // alert stuck at "nobody was told".
     const retried = await notifySafetyTeam(await sosMessage());
     if (retried === 0) return refreshed;
-    const [updated] = await db.update(sosAlerts).set({ notifiedCount: retried }).where(eq(sosAlerts.id, existing.id)).returning();
+    const [updated] = await db
+      .update(sosAlerts)
+      .set({ notifiedCount: retried, lastUpdateSentAt: new Date(), lastUpdateLocation: location })
+      .where(eq(sosAlerts.id, existing.id))
+      .returning();
     return toSosAlert(updated);
   }
 
@@ -258,7 +402,11 @@ export async function triggerSos(params: {
   const notifiedCount = await notifySafetyTeam(await sosMessage());
   if (notifiedCount === 0) return toSosAlert(created);
 
-  const [updated] = await db.update(sosAlerts).set({ notifiedCount }).where(eq(sosAlerts.id, created.id)).returning();
+  const [updated] = await db
+    .update(sosAlerts)
+    .set({ notifiedCount, lastUpdateSentAt: new Date(), lastUpdateLocation: location })
+    .where(eq(sosAlerts.id, created.id))
+    .returning();
   return toSosAlert(updated);
 }
 
@@ -266,7 +414,12 @@ export async function triggerSos(params: {
 export async function getActiveSos(rawErrandId: unknown, role: Role, userId: string): Promise<SosAlert | null> {
   const errand = await loadErrandForParty(rawErrandId, role, userId);
   const row = await findActiveAlert(errand.id, role);
-  return row ? toSosAlert(row) : null;
+  if (!row) return null;
+  if (isStale(row, errand, Date.now())) {
+    await autoCloseAlert(errand, row);
+    return null;
+  }
+  return toSosAlert(row);
 }
 
 /** "I'm safe" — closes the caller's active alert. Only the person who
@@ -278,7 +431,7 @@ export async function resolveSos(rawErrandId: unknown, role: Role, userId: strin
 
   const [row] = await db
     .update(sosAlerts)
-    .set({ status: "resolved", resolvedAt: new Date() })
+    .set({ status: "resolved", resolvedAt: new Date(), resolvedBy: "self" })
     .where(eq(sosAlerts.id, existing.id))
     .returning();
 

@@ -438,12 +438,21 @@ export const sosAlerts = pgTable(
     location: jsonb("location").$type<{ lat: number; lng: number }>().notNull(),
     status: sosAlertStatusEnum("status").notNull().default("active"),
     notifiedCount: integer("notified_count").notNull().default(0),
+    // Follow-up location updates to the safety team (see lib/sos.ts): when
+    // the last one went out, where the person was then, and how many have
+    // been sent — so updates can be rate-limited and capped.
+    lastUpdateSentAt: timestamp("last_update_sent_at", { withTimezone: true }),
+    lastUpdateLocation: jsonb("last_update_location").$type<{ lat: number; lng: number }>(),
+    updateCount: integer("update_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow()
       .$onUpdate(() => new Date()),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    // "self" = the person tapped "I'm safe"; "auto" = closed by the server
+    // because it went stale and nobody confirmed they were safe.
+    resolvedBy: text("resolved_by").$type<"self" | "auto">(),
   },
   (table) => [
     uniqueIndex("sos_alerts_one_active_per_person_idx")

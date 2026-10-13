@@ -13,6 +13,7 @@ import runnersRouter from "./routes/runners";
 import pushRouter from "./routes/push";
 import { errorHandler } from "./middleware/errorHandler";
 import { attachChatServer } from "./lib/chat-server";
+import { expireStaleAlerts } from "./lib/sos";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -70,3 +71,10 @@ const httpServer = app.listen(PORT, () => {
 // Chat runs on the same HTTP server/port as the REST API (path /ws/chat)
 // rather than a separate port — one less thing to configure/expose.
 attachChatServer(httpServer);
+
+// Close SOS alerts that went stale (see lib/sos.ts). Also runs once at
+// start-up, since a free-tier host that was asleep may have missed some.
+const SOS_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+const sweepSos = () => expireStaleAlerts().catch((err) => console.error("[sos] sweep failed", err));
+void sweepSos();
+setInterval(sweepSos, SOS_SWEEP_INTERVAL_MS).unref();
