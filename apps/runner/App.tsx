@@ -16,6 +16,8 @@ import { AuthProvider } from "./src/context/AuthContext";
 import PermissionHost from "./src/components/PermissionHost";
 import PushHost from "./src/components/PushHost";
 import LiveLocationHost from "./src/components/LiveLocationHost";
+import OnlineLocationHost from "./src/components/OnlineLocationHost";
+import RunnerPermissionsHost from "./src/components/RunnerPermissionsHost";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -59,8 +61,10 @@ export default function App() {
           <StatusBar style="light" />
           <RootNavigator />
           <PermissionHost />
+          <RunnerPermissionsHost />
           <PushHost />
           <LiveLocationHost />
+          <OnlineLocationHost />
         </View>
       </AuthProvider>
     </SafeAreaProvider>

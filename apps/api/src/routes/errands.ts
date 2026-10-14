@@ -10,6 +10,7 @@ import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
 import { parseErrandFromText } from "../lib/ai";
 import { getAgoraJoinInfo } from "../lib/agora";
+import { notifyNearbyRunners } from "../lib/errand-alerts";
 import { triggerSos, getActiveSos, resolveSos } from "../lib/sos";
 import { triggerSosSchema } from "../schemas/sos";
 import { sharePositionSchema } from "../schemas/location";
@@ -122,6 +123,10 @@ router.post(
         deliveryPin: generateDeliveryPin(),
       })
       .returning();
+
+    // Let nearby online runners know right away (push), so their feed
+    // doesn't depend on pull-to-refresh. Best-effort and not awaited.
+    void notifyNearbyRunners(row);
 
     res.status(201).json({ errand: toErrand(row) });
   })

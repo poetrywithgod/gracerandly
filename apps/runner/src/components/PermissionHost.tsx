@@ -1,4 +1,5 @@
-// Identical to apps/requester/src/components/PermissionHost.tsx — see
+// Same as apps/requester/src/components/PermissionHost.tsx apart from the
+// notifications wording — see
 // GlassCard.tsx's header comment for why it's duplicated.
 //
 // Renders lib/permissions.ts's prompts in the same card style as
@@ -46,7 +47,7 @@ const COPY: Record<PermissionKind, { Icon: LucideIcon; title: string; why: strin
   notifications: {
     Icon: Bell,
     title: "Allow notifications",
-    why: "Gracerandly can alert you to new messages and missed calls about your errand, even when the app is closed.",
+    why: "Gracerandly alerts you when a new errand is posted near you, plus messages and missed calls about your errands — even when the app is closed.",
     settingsHint: "Notifications are turned off for Gracerandly. Open Settings, then Notifications, and choose Allow.",
   },
 };

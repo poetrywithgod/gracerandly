@@ -9,6 +9,7 @@ import { getCurrentCoordinate } from "../lib/location";
 import { requestLiveLocationRefresh } from "../lib/liveLocation";
 import LiveTrackingMap from "../components/LiveTrackingMap";
 import ReviewCard from "../components/ReviewCard";
+import { MessageCircle } from "lucide-react-native";
 import Button from "../components/Button";
 import SosButton from "../components/SosButton";
 import TextField from "../components/TextField";
@@ -148,12 +149,16 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
       <View style={styles.card}>
         <Text style={styles.status}>{errand.status.replace(/_/g, " ")}</Text>
         <Text style={styles.cost}>₦{errand.estimatedCost.toLocaleString()}</Text>
-        {CHAT_ALLOWED_STATUSES.includes(errand.status) ? (
-          <Text style={styles.chatLink} onPress={() => navigation.navigate("Chat", { errandId: errand.id })}>
-            Message requester
-          </Text>
-        ) : null}
       </View>
+
+      {CHAT_ALLOWED_STATUSES.includes(errand.status) ? (
+        <Button
+          label="Message requester"
+          icon={MessageCircle}
+          size="large"
+          onPress={() => navigation.navigate("Chat", { errandId: errand.id })}
+        />
+      ) : null}
 
       {LIVE_MAP_STATUSES.includes(errand.status) ? (
         <LiveTrackingMap errandId={errand.id} pickup={errand.pickup} dropoff={errand.dropoff} status={errand.status} />
@@ -227,7 +232,6 @@ const styles = StyleSheet.create({
   },
   status: { fontFamily: theme.fonts.uiSemibold, fontSize: 16, color: theme.colors.primaryDark, textTransform: "capitalize" },
   cost: { fontFamily: theme.fonts.uiSemibold, fontSize: 20, color: theme.colors.text },
-  chatLink: { fontFamily: theme.fonts.uiMedium, fontSize: 14, color: theme.colors.primary, marginTop: 4 },
   sectionLabel: { fontFamily: theme.fonts.uiMedium, fontSize: 12, color: theme.colors.textMuted, textTransform: "uppercase", marginTop: 6 },
   address: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.text },
   itemLine: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.text },

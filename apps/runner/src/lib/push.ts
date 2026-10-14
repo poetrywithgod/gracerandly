@@ -1,5 +1,6 @@
-// Identical to apps/requester/src/lib/push.ts — see components/GlassCard.tsx's
-// header comment for why it's duplicated.
+// Same as apps/requester/src/lib/push.ts apart from the extra "errands"
+// channel below (see components/GlassCard.tsx's header comment for why the
+// two apps duplicate files).
 //
 // Push notifications: lets the API reach this phone when the app is closed
 // (a new chat message, a missed call). After login we ask permission (in the
@@ -35,6 +36,12 @@ async function ensureAndroidChannels() {
     name: "Messages",
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 250, 250, 250],
+  });
+  // New-errand alerts for runners (and the "finish an errand" nudge).
+  await Notifications.setNotificationChannelAsync("errands", {
+    name: "New errands",
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0, 300, 200, 300],
   });
   await Notifications.setNotificationChannelAsync("calls", {
     name: "Calls",

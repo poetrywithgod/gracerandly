@@ -1,7 +1,8 @@
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { Home as HomeIcon, User } from "lucide-react-native";
+import { Home as HomeIcon, User, Wallet } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import HomeScreen from "../screens/HomeScreen";
+import EarningsScreen from "../screens/EarningsScreen";
 import ProfileScreen from "../screens/ProfileScreen";
 import AppHeader from "../components/AppHeader";
 import type { TabParamList } from "./types";
@@ -29,6 +30,13 @@ export default function TabNavigator() {
         component={HomeScreen}
         options={{
           tabBarIcon: ({ color, size }) => <HomeIcon color={color} size={size} />,
+        }}
+      />
+      <Tab.Screen
+        name="Earnings"
+        component={EarningsScreen}
+        options={{
+          tabBarIcon: ({ color, size }) => <Wallet color={color} size={size} />,
         }}
       />
       <Tab.Screen

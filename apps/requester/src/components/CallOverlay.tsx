@@ -18,6 +18,8 @@ interface CallOverlayProps {
   participant: ChatParticipant | null;
   callState: CallState;
   callMode: CallMode;
+  /** When the call was answered (ms since epoch) — the timer counts up from here. */
+  activeSince: number | null;
   onAccept: () => void;
   onDecline: () => void;
   onEnd: () => void;
@@ -40,6 +42,7 @@ export default function CallOverlay({
   participant,
   callState,
   callMode,
+  activeSince,
   onAccept,
   onDecline,
   onEnd,
@@ -50,6 +53,16 @@ export default function CallOverlay({
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Tick once a second while the call is live so the timer moves.
+  useEffect(() => {
+    if (callState !== "active" || !activeSince) return;
+    setNow(Date.now());
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [callState, activeSince]);
+  const elapsed = activeSince ? formatDuration((now - activeSince) / 1000) : null;
 
   const isVideo = callMode === "video";
   const name = participant?.name ?? (role === "runner" ? "Requester" : "Runner");
@@ -176,6 +189,9 @@ export default function CallOverlay({
                       ? ""
                       : "On call"}
           </Text>
+          {callState === "active" && elapsed && !error ? (
+            <Text style={[styles.timer, isVideo && remoteUid !== null && styles.timerOverVideo]}>{elapsed}</Text>
+          ) : null}
           {callState === "active" && !joined && !error ? <ActivityIndicator color="#fff" /> : null}
         </View>
 
@@ -217,7 +233,20 @@ export default function CallOverlay({
   );
 }
 
+/** 75 -> "1:15", 3725 -> "1:02:05". */
+export function formatDuration(totalSeconds: number): string {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  return `${h > 0 ? `${h}:` : ""}${mm}:${String(sec).padStart(2, "0")}`;
+}
+
 const styles = StyleSheet.create({
+  timer: { fontFamily: theme.fonts.uiSemibold, fontSize: 22, color: "#fff", letterSpacing: 1 },
+  // With video running the timer floats at the top so it doesn't cover the other person.
+  timerOverVideo: { position: "absolute", top: 70, alignSelf: "center", textShadowColor: "rgba(0,0,0,0.6)", textShadowRadius: 6 },
   container: { flex: 1, backgroundColor: "#1c1220", justifyContent: "space-between" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   name: { fontFamily: theme.fonts.uiSemibold, fontSize: 24, color: "#fff", marginTop: 8 },

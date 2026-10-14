@@ -16,7 +16,34 @@ import type { ChatMessage } from "@gracerandly/shared-types";
 /** What's stored/rendered locally: always a plain message (edits are
  * applied to the original row rather than stored as their own bubble),
  * plus whether it's been edited since it was first sent. */
-export type LocalChatMessage = ChatMessage & { edited: boolean };
+export type LocalChatMessage = Omit<ChatMessage, "contentType"> & {
+  /** "call" rows are this device's own log of a call (see CallLog below) — not messages. */
+  contentType: "text" | "audio" | "call";
+  edited: boolean;
+};
+
+/** What a "call" row's content holds (as JSON). Calls aren't stored on the
+ * server at all, so each device writes its own log entry when a call ends —
+ * both phones see the same signaling, so both end up with the same entry. */
+export interface CallLog {
+  /** Who started the call. */
+  caller: "requester" | "runner";
+  mode: "audio" | "video";
+  /** completed = it was answered; declined = the other side said no;
+   * missed = nobody picked up (or the caller gave up) before it was answered. */
+  outcome: "completed" | "declined" | "missed";
+  /** Seconds the call lasted — only for completed calls. */
+  durationSec: number;
+}
+
+export function parseCallLog(content: string): CallLog | null {
+  try {
+    const value = JSON.parse(content) as CallLog;
+    return value && typeof value.caller === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 const db = SQLite.openDatabaseSync("gracerandly_chat.db");
 
@@ -56,7 +83,7 @@ interface Row {
   senderRole: "requester" | "runner";
   senderId: string;
   content: string;
-  contentType: "text" | "audio";
+  contentType: "text" | "audio" | "call";
   edited: number;
   createdAt: string;
 }
@@ -64,7 +91,7 @@ interface Row {
 /** Insert-or-replace by id, so re-saving a message already on disk (e.g. a
  * duplicate delivery before an ack lands) is a harmless no-op rather than
  * a second row. */
-export function saveMessage(message: Pick<ChatMessage, "id" | "errandId" | "senderRole" | "senderId" | "content" | "createdAt"> & { contentType: "text" | "audio" }): void {
+export function saveMessage(message: Pick<ChatMessage, "id" | "errandId" | "senderRole" | "senderId" | "content" | "createdAt"> & { contentType: "text" | "audio" | "call" }): void {
   ensureInitialized();
   db.runSync(
     "INSERT OR REPLACE INTO messages (id, errandId, senderRole, senderId, content, contentType, edited, createdAt) VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT edited FROM messages WHERE id = ?), 0), ?)",

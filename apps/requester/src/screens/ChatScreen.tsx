@@ -22,6 +22,7 @@ import type { LocalChatMessage } from "../lib/chatDb";
 import Avatar from "../components/Avatar";
 import VoiceNoteBubble from "../components/VoiceNoteBubble";
 import CallOverlay from "../components/CallOverlay";
+import CallLogRow from "../components/CallLogRow";
 import NoticeModal from "../components/NoticeModal";
 import type { MainStackParamList } from "../navigation/types";
 
@@ -168,6 +169,9 @@ export default function ChatScreen({ route, navigation }: Props) {
         contentContainerStyle={styles.list}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
         renderItem={({ item }) => {
+          if (item.contentType === "call") {
+            return <CallLogRow message={item} ownRole={ROLE} otherName={otherName} />;
+          }
           const isMine = item.senderRole === ROLE;
           const avatar = isMine ? (
             <Avatar name={user?.fullName ?? "Me"} uri={user?.avatarUrl} size={28} />
@@ -257,6 +261,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           participant={participant}
           callState={chat.callState}
           callMode={chat.callMode}
+          activeSince={chat.callActiveSince}
           onAccept={chat.acceptCall}
           onDecline={chat.declineCall}
           onEnd={chat.endCall}

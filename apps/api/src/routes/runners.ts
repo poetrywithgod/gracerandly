@@ -500,7 +500,70 @@ router.get(
       .reduce((sum, row) => sum + row.runnerPayout, 0);
     const totalPaidOut = successPayouts.reduce((sum, row) => sum + row.amount, 0);
 
-    res.json({ totalEarned, availableBalance, totalPaidOut, completedErrandsCount: completedRows.length });
+    // Money already paid by requesters for errands this runner has accepted
+    // but not yet delivered — held in escrow, released when delivery is
+    // confirmed with the PIN. Shown on the dashboard as "pending".
+    const escrowedRows = await db
+      .select({ runnerPayout: escrowTransactions.runnerPayout })
+      .from(escrowTransactions)
+      .where(and(eq(escrowTransactions.runnerId, req.runnerId!), eq(escrowTransactions.status, "escrowed")));
+    const pendingBalance = escrowedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
+
+    res.json({
+      totalEarned,
+      availableBalance,
+      pendingBalance,
+      totalPaidOut,
+      completedErrandsCount: completedRows.length,
+    });
+  })
+);
+
+// Per-errand earnings for the Earnings dashboard — one row per escrow
+// transaction attached to this runner, newest first, so the runner can see
+// exactly what each errand paid (after the platform commission) and whether
+// it's still held, ready to withdraw, or already sent to their bank.
+router.get(
+  "/me/earnings/history",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const rows = await db
+      .select({
+        id: escrowTransactions.id,
+        errandId: escrowTransactions.errandId,
+        status: escrowTransactions.status,
+        runnerPayout: escrowTransactions.runnerPayout,
+        commissionAmount: escrowTransactions.commissionAmount,
+        amount: escrowTransactions.amount,
+        createdAt: escrowTransactions.createdAt,
+        releasedAt: escrowTransactions.releasedAt,
+        category: errands.category,
+      })
+      .from(escrowTransactions)
+      .innerJoin(errands, eq(errands.id, escrowTransactions.errandId))
+      .where(
+        and(
+          eq(escrowTransactions.runnerId, req.runnerId!),
+          inArray(escrowTransactions.status, ["escrowed", "released", "disbursed"])
+        )
+      )
+      .orderBy(desc(escrowTransactions.createdAt))
+      .limit(50);
+
+    res.json({
+      items: rows.map((row) => ({
+        id: row.id,
+        errandId: row.errandId,
+        category: row.category,
+        // "held" = paid by the requester, errand not delivered yet;
+        // "available" = delivered, ready to withdraw; "paid_out" = sent to the bank.
+        state: row.status === "escrowed" ? "held" : row.status === "released" ? "available" : "paid_out",
+        runnerPayout: row.runnerPayout,
+        commissionAmount: row.commissionAmount,
+        errandFee: row.amount,
+        earnedAt: (row.releasedAt ?? row.createdAt).toISOString(),
+      })),
+    });
   })
 );
 

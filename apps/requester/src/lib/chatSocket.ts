@@ -10,13 +10,18 @@
  * tracks call state (ringing / incoming / active) driven by the same
  * socket's call-* signaling messages.
  *
+ * Call log: calls themselves aren't stored on the server, so when a call
+ * ends (answered, declined or missed) this hook writes a "call" row into the
+ * local chat history — who started it, the outcome and how long it lasted.
+ * Both phones see the same signaling, so both end up with the same entry.
+ *
  * Calls only ring while this hook is mounted (i.e. the chat screen is
  * open) — there's no app-wide socket yet, so an app that isn't on the chat
  * screen can't be rung. Worth revisiting alongside push notifications.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE_URL } from "./apiClient";
-import { applyEdit, getMessages, saveMessage, type LocalChatMessage } from "./chatDb";
+import { applyEdit, getMessages, saveMessage, type CallLog, type LocalChatMessage } from "./chatDb";
 
 export type ChatRole = "requester" | "runner";
 export type ChatConnectionState = "connecting" | "open" | "closed";
@@ -58,6 +63,13 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
   const [callState, setCallState] = useState<CallState>("idle");
   const [callMode, setCallMode] = useState<CallMode>("audio");
   const [callUnavailable, setCallUnavailable] = useState(false);
+  // When the current call was answered (ms since epoch) — drives the on-screen timer.
+  const [callActiveSince, setCallActiveSince] = useState<number | null>(null);
+
+  // The socket handlers below outlive any one render, so they read the live
+  // call state from refs rather than from (stale) closed-over state.
+  const callStateRef = useRef<CallState>("idle");
+  const callMetaRef = useRef<{ caller: ChatRole; mode: CallMode; activeSince: number | null } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttempt = useRef(0);
@@ -74,6 +86,36 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
       prev.some((m) => m.id === message.id) ? prev : [...prev, { ...message, kind: "message", edited: false }]
     );
   }, []);
+
+  const setCall = useCallback((next: CallState) => {
+    callStateRef.current = next;
+    setCallState(next);
+  }, []);
+
+  /** Ends the current call locally and writes its entry into the chat. Safe
+   * to call twice for the same call — the second time there's nothing left to log. */
+  const finishCall = useCallback(
+    (outcome: CallLog["outcome"]) => {
+      const meta = callMetaRef.current;
+      callMetaRef.current = null;
+      setCallActiveSince(null);
+      setCall("idle");
+      if (!meta) return;
+      const durationSec =
+        outcome === "completed" && meta.activeSince ? Math.max(0, Math.round((Date.now() - meta.activeSince) / 1000)) : 0;
+      const log: CallLog = { caller: meta.caller, mode: meta.mode, outcome, durationSec };
+      addMessage({
+        id: `call-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        errandId,
+        senderRole: meta.caller,
+        senderId: meta.caller === role ? (ownUserId ?? "") : "",
+        contentType: "call",
+        content: JSON.stringify(log),
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [addMessage, errandId, role, ownUserId, setCall]
+  );
 
   const editLocal = useCallback((targetMessageId: string, content: string) => {
     applyEdit(targetMessageId, content);
@@ -137,19 +179,31 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
             }
             break;
           }
-          case "call-invite":
-            setCallMode(data.mode ?? "audio");
-            setCallState("incoming");
+          case "call-invite": {
+            const mode = data.mode ?? "audio";
+            callMetaRef.current = { caller: role === "runner" ? "requester" : "runner", mode, activeSince: null };
+            setCallMode(mode);
+            setCall("incoming");
             break;
+          }
           case "call-accept":
-            setCallState((s) => (s === "outgoing" ? "active" : s));
+            if (callStateRef.current === "outgoing" && callMetaRef.current) {
+              const now = Date.now();
+              callMetaRef.current.activeSince = now;
+              setCallActiveSince(now);
+              setCall("active");
+            }
             break;
           case "call-decline":
+            finishCall("declined");
+            break;
           case "call-end":
-            setCallState("idle");
+            // Hung up mid-call = a completed call; hung up before it was
+            // answered = a missed one (for the person who was being rung).
+            finishCall(callStateRef.current === "active" ? "completed" : "missed");
             break;
           case "call-unavailable":
-            setCallState("idle");
+            finishCall("missed");
             setCallUnavailable(true);
             break;
         }
@@ -157,7 +211,8 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
 
       ws.onclose = () => {
         setConnectionState("closed");
-        setCallState("idle"); // a dropped socket can't carry a call's signaling
+        // A dropped socket can't carry a call's signaling.
+        if (callStateRef.current !== "idle") finishCall(callStateRef.current === "active" ? "completed" : "missed");
         if (closedByUs.current) return;
         const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt.current, RECONNECT_DELAYS_MS.length - 1)];
         reconnectAttempt.current += 1;
@@ -176,7 +231,7 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };
-  }, [errandId, token, role, ownUserId, addMessage, editLocal]);
+  }, [errandId, token, role, ownUserId, addMessage, editLocal, finishCall, setCall]);
 
   const rawSend = useCallback((payload: unknown): boolean => {
     if (wsRef.current?.readyState !== WebSocket.OPEN) return false;
@@ -217,25 +272,33 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
     (mode: CallMode) => {
       setCallUnavailable(false);
       if (rawSend({ type: "call-invite", mode })) {
+        callMetaRef.current = { caller: role, mode, activeSince: null };
         setCallMode(mode);
-        setCallState("outgoing");
+        setCall("outgoing");
       } else {
         setCallUnavailable(true);
       }
     },
-    [rawSend]
+    [rawSend, role, setCall]
   );
   const acceptCall = useCallback(() => {
-    if (rawSend({ type: "call-accept" })) setCallState("active");
-  }, [rawSend]);
+    if (rawSend({ type: "call-accept" })) {
+      const now = Date.now();
+      if (callMetaRef.current) callMetaRef.current.activeSince = now;
+      setCallActiveSince(now);
+      setCall("active");
+    }
+  }, [rawSend, setCall]);
   const declineCall = useCallback(() => {
     rawSend({ type: "call-decline" });
-    setCallState("idle");
-  }, [rawSend]);
+    finishCall("declined");
+  }, [rawSend, finishCall]);
   const endCall = useCallback(() => {
+    const state = callStateRef.current;
+    if (state === "idle") return; // already ended (e.g. the other side hung up first)
     rawSend({ type: "call-end" });
-    setCallState("idle");
-  }, [rawSend]);
+    finishCall(state === "active" ? "completed" : "missed");
+  }, [rawSend, finishCall]);
   const dismissCallUnavailable = useCallback(() => setCallUnavailable(false), []);
 
   return {
@@ -246,6 +309,7 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
     sendEdit,
     callState,
     callMode,
+    callActiveSince,
     callUnavailable,
     dismissCallUnavailable,
     startCall,

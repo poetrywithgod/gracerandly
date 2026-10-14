@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, FlatList, RefreshControl, Pressable } from "react-native";
-import { useNavigation, type CompositeNavigationProp } from "@react-navigation/native";
+import { useFocusEffect, useNavigation, type CompositeNavigationProp } from "@react-navigation/native";
 import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
@@ -8,8 +8,10 @@ import type { Errand } from "@gracerandly/shared-types";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
 import { requestLiveLocationRefresh } from "../lib/liveLocation";
-import { getCurrentCoordinate, LocationPermissionDeniedError } from "../lib/location";
+import { getCurrentCoordinate, LocationPermissionDeniedError, requestLocationPermission } from "../lib/location";
+import { onErrandFeedRefreshRequested } from "../lib/errandFeed";
 import Button from "../components/Button";
+import ConfirmModal from "../components/ConfirmModal";
 import type { MainStackParamList, TabParamList } from "../navigation/types";
 
 const theme = getTheme("light");
@@ -18,6 +20,11 @@ type HomeNavigationProp = CompositeNavigationProp<
   BottomTabNavigationProp<TabParamList, "Home">,
   NativeStackNavigationProp<MainStackParamList>
 >;
+
+// How often the list of available errands re-checks on its own while this
+// screen is showing (and a push that arrives while the app is open triggers
+// an immediate re-check on top of this).
+const FEED_POLL_INTERVAL_MS = 10_000;
 
 const ACTIVE_STATUSES: Errand["status"][] = ["accepted", "en_route_to_pickup", "in_progress", "en_route_to_delivery"];
 
@@ -39,10 +46,19 @@ export default function HomeScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isTogglingOnline, setIsTogglingOnline] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Errand the runner tapped "Accept" on, waiting for them to confirm that
+  // their live location will be shared with the requester.
+  const [pendingAcceptId, setPendingAcceptId] = useState<string | null>(null);
+  const [isAccepting, setIsAccepting] = useState(false);
+  // Errand ids already shown once, so ones that appear later get a "New" badge.
+  const seenIds = useRef<Set<string> | null>(null);
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
 
-  const load = useCallback(async () => {
+  // `silent` is the background poll: it shouldn't flash or clear an error the
+  // runner is reading, and a failed poll just waits for the next one.
+  const load = useCallback(async (silent = false) => {
     if (!token) return;
-    setError(null);
+    if (!silent) setError(null);
     try {
       const mineResponse = await apiFetch<{ errands: Errand[] }>("/runners/errands/mine", {
         headers: { Authorization: `Bearer ${token}` },
@@ -60,18 +76,54 @@ export default function HomeScreen() {
         );
         setAvailable(availableResponse.errands);
         setRadiusMiles(availableResponse.radiusMiles);
+
+        // First load just records what's there; after that, anything not seen before is "new".
+        const ids = availableResponse.errands.map((e) => e.id);
+        if (seenIds.current === null) {
+          seenIds.current = new Set(ids);
+        } else {
+          const fresh = ids.filter((id) => !seenIds.current!.has(id));
+          if (fresh.length > 0) {
+            fresh.forEach((id) => seenIds.current!.add(id));
+            setNewIds((prev) => new Set([...prev, ...fresh]));
+          }
+        }
       } else {
         setAvailable([]);
         setRadiusMiles(null);
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't load errands");
+      if (!silent) setError(err instanceof ApiError ? err.message : "Couldn't load errands");
     }
   }, [token, user?.isOnline, user?.currentLocation]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Errands feed in on their own: re-check every few seconds while this tab
+  // is showing and the runner is online, and straight away when a "new
+  // errand" push arrives while the app is open. (When the app is closed the
+  // push itself is the alert — see apps/api's lib/errand-alerts.ts.)
+  useFocusEffect(
+    useCallback(() => {
+      if (!user?.isOnline) return;
+      const interval = setInterval(() => load(true), FEED_POLL_INTERVAL_MS);
+      const unsubscribe = onErrandFeedRefreshRequested(() => load(true));
+      return () => {
+        clearInterval(interval);
+        unsubscribe();
+      };
+    }, [load, user?.isOnline])
+  );
+
+  // Going offline resets what counts as "new".
+  useEffect(() => {
+    if (!user?.isOnline) {
+      seenIds.current = null;
+      setNewIds(new Set());
+    }
+  }, [user?.isOnline]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
@@ -107,10 +159,29 @@ export default function HomeScreen() {
     }
   }, [user?.isOnline, user?.identityVerified, navigation, setOnlineStatus, refreshUser]);
 
-  const handleAccept = useCallback(
-    async (errandId: string) => {
+  // Step 1: tapping Accept asks the runner to agree to share their location.
+  const handleAccept = useCallback((errandId: string) => {
+    setError(null);
+    setPendingAcceptId(errandId);
+  }, []);
+
+  // Step 2: they agreed — make sure the phone's location permission is on
+  // (the requester follows the runner on a live map), then accept.
+  const confirmAccept = useCallback(
+    async () => {
+      const errandId = pendingAcceptId;
+      if (!errandId) return;
+      setIsAccepting(true);
       setError(null);
       try {
+        try {
+          await requestLocationPermission();
+        } catch (err) {
+          setPendingAcceptId(null);
+          setError(err instanceof LocationPermissionDeniedError ? "Location access is needed to accept an errand — the requester follows your progress on the map." : "Couldn't turn on location");
+          return;
+        }
+        setPendingAcceptId(null);
         await apiFetch(`/runners/errands/${errandId}/accept`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
@@ -120,9 +191,11 @@ export default function HomeScreen() {
         navigation.navigate("ErrandDetail", { errandId });
       } catch (err) {
         setError(err instanceof ApiError ? err.message : "Couldn't accept this errand");
+      } finally {
+        setIsAccepting(false);
       }
     },
-    [token, load, navigation]
+    [pendingAcceptId, token, load, navigation]
   );
 
   const atCapacity = myErrands.length >= 3;
@@ -176,7 +249,10 @@ export default function HomeScreen() {
 
           {!user?.isOnline ? <Text style={styles.emptyText}>Go online to see errands near you.</Text> : null}
           {user?.isOnline && atCapacity ? (
-            <Text style={styles.emptyText}>You&apos;re at your 3-errand limit — finish one to see more.</Text>
+            <View style={styles.limitCard}>
+              <Text style={styles.limitTitle}>You&apos;re at your 3-errand limit</Text>
+              <Text style={styles.limitBody}>Quickly finish an errand so you can accept new errands.</Text>
+            </View>
           ) : null}
           {user?.isOnline && !atCapacity && available.length === 0 ? (
             <Text style={styles.emptyText}>No open errands nearby right now.</Text>
@@ -191,8 +267,21 @@ export default function HomeScreen() {
           onPress={() => navigation.navigate("ErrandDetail", { errandId: item.id })}
           actionLabel="Accept"
           onAction={() => handleAccept(item.id)}
+          isNew={newIds.has(item.id)}
         />
       )}
+      ListFooterComponent={
+        <ConfirmModal
+          visible={pendingAcceptId !== null}
+          title="Accept this errand?"
+          body="Your live location will be shared with the requester until the errand is delivered, so they can follow your progress."
+          confirmLabel="Accept & share location"
+          cancelLabel="Not now"
+          isConfirming={isAccepting}
+          onConfirm={confirmAccept}
+          onCancel={() => setPendingAcceptId(null)}
+        />
+      }
     />
   );
 }
@@ -202,16 +291,21 @@ function ErrandCard({
   onPress,
   actionLabel,
   onAction,
+  isNew,
 }: {
   errand: Errand;
   onPress: () => void;
   actionLabel?: string;
   onAction?: () => void;
+  isNew?: boolean;
 }) {
   return (
     <Pressable style={styles.card} onPress={onPress}>
       <View style={styles.cardHeader}>
-        <Text style={styles.cardCategory}>{CATEGORY_LABELS[errand.category]}</Text>
+        <Text style={styles.cardCategory}>
+          {CATEGORY_LABELS[errand.category]}
+          {isNew ? <Text style={styles.newBadge}>{"  NEW"}</Text> : null}
+        </Text>
         <Text style={styles.cardCost}>₦{errand.estimatedCost.toLocaleString()}</Text>
       </View>
       <Text style={styles.cardAddress} numberOfLines={1}>
@@ -268,5 +362,17 @@ const styles = StyleSheet.create({
   cardCost: { fontFamily: theme.fonts.uiSemibold, fontSize: 14, color: theme.colors.text },
   cardAddress: { fontFamily: theme.fonts.ui, fontSize: 12, color: theme.colors.textMuted },
   cardStatus: { fontFamily: theme.fonts.uiMedium, fontSize: 12, color: theme.colors.info, textTransform: "capitalize" },
+  newBadge: { fontFamily: theme.fonts.uiSemibold, fontSize: 11, color: theme.colors.success },
+  limitCard: {
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
+    gap: 2,
+  },
+  limitTitle: { fontFamily: theme.fonts.uiSemibold, fontSize: 14, color: theme.colors.primaryDark },
+  limitBody: { fontFamily: theme.fonts.ui, fontSize: 13, color: theme.colors.text },
   cardButton: { marginTop: theme.spacing.sm },
 });

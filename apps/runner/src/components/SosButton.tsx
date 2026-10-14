@@ -102,9 +102,13 @@ export default function SosButton({ errandId, token, apiBasePath, otherPartyLabe
       });
       setAlert(response.alert);
     } catch (err) {
+      // 112 is only ever shown here as a fallback when the alert itself
+      // couldn't be sent — it is not where a successful SOS goes.
       setError(
         err instanceof ApiError
-          ? `${err.message}. If you're in danger, call ${EMERGENCY_NUMBER} now.`
+          ? err.status >= 500
+            ? `We couldn't send your SOS to our safety team just now (server problem). If you're in danger, call ${EMERGENCY_NUMBER} now.`
+            : `${err.message}. If you're in danger, call ${EMERGENCY_NUMBER} now.`
           : `Couldn't get your location to send the SOS. Turn on location, or call ${EMERGENCY_NUMBER} now.`
       );
     } finally {

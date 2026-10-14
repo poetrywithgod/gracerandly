@@ -4,7 +4,7 @@ import { useFocusEffect, useNavigation, useRoute, type RouteProp } from "@react-
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
 import type { Errand, ErrandStatus } from "@gracerandly/shared-types";
-import { KeyRound } from "lucide-react-native";
+import { KeyRound, MessageCircle } from "lucide-react-native";
 import Button from "../components/Button";
 import SosButton from "../components/SosButton";
 import LoadingScreen from "../components/LoadingScreen";
@@ -203,7 +203,9 @@ export default function ErrandDetailScreen() {
       {CHAT_ALLOWED_STATUSES.has(errand.status) ? (
         <Button
           label="Message runner"
-          variant="secondary"
+          icon={MessageCircle}
+          size="large"
+          style={styles.messageButton}
           onPress={() => navigation.navigate("Chat", { errandId: errand.id })}
         />
       ) : null}
@@ -396,6 +398,7 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   actionButton: { alignSelf: "stretch" },
+  messageButton: { marginTop: theme.spacing.md, marginBottom: theme.spacing.md },
   errorText: {
     fontFamily: theme.fonts.ui,
     fontSize: 14,
