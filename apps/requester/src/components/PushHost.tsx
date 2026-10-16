@@ -2,7 +2,8 @@
 // header comment for why it's duplicated.
 //
 // Renders nothing. While someone is signed in it (1) registers the phone for
-// push notifications and (2) opens the right chat when a notification is
+// push notifications and (2) opens the right screen (a chat, or the Wallet for a
+// just-posted repeating errand) when a notification is
 // tapped — including when the tap is what launched the app from closed.
 // Mount once, near the root (App.tsx), inside AuthProvider.
 import { useEffect, useRef } from "react";
@@ -13,12 +14,12 @@ import { navigationRef } from "../navigation/navigationRef";
 
 // Cold start: the tap can be handled before the navigator has mounted, so
 // retry briefly instead of dropping it.
-function openChatWhenReady(errandId: string, attemptsLeft = 40) {
+function whenNavigatorReady(go: () => void, attemptsLeft = 40) {
   if (navigationRef.isReady()) {
-    navigationRef.navigate("Chat", { errandId });
+    go();
     return;
   }
-  if (attemptsLeft > 0) setTimeout(() => openChatWhenReady(errandId, attemptsLeft - 1), 250);
+  if (attemptsLeft > 0) setTimeout(() => whenNavigatorReady(go, attemptsLeft - 1), 250);
 }
 
 export default function PushHost() {
@@ -38,8 +39,16 @@ export default function PushHost() {
     handledId.current = id;
     if (!token) return;
     if (lastResponse.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
-    const errandId = lastResponse.notification.request.content.data?.errandId;
-    if (typeof errandId === "string") openChatWhenReady(errandId);
+    const data = lastResponse.notification.request.content.data;
+    const errandId = data?.errandId;
+    if (typeof errandId !== "string") return;
+    if (data?.type === "recurring_posted") {
+      // A repeating errand was just posted and is waiting for payment — the
+      // Wallet tab lists unpaid errands with a "Pay now" button.
+      whenNavigatorReady(() => navigationRef.navigate("Tabs", { screen: "Wallet" }));
+    } else {
+      whenNavigatorReady(() => navigationRef.navigate("Chat", { errandId }));
+    }
   }, [lastResponse, token]);
 
   return null;

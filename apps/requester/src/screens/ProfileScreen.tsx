@@ -1,7 +1,9 @@
 import { useCallback, useState } from "react";
 import { View, Text, Image, ScrollView, StyleSheet, RefreshControl, Pressable } from "react-native";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import {
+  Repeat,
   Phone,
   Mail,
   ShieldCheck,
@@ -25,6 +27,7 @@ import ReviewsListModal from "../components/ReviewsListModal";
 import VerificationModal from "../components/VerificationModal";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
+import type { MainStackParamList } from "../navigation/types";
 
 const theme = getTheme("light");
 
@@ -67,6 +70,7 @@ function formatNaira(amount: number): string {
 
 export default function ProfileScreen() {
   const { user, token, signOut, updateProfile, updateAvatar } = useAuth();
+  const navigation = useNavigation<NativeStackNavigationProp<MainStackParamList>>();
 
   const [isEditing, setIsEditing] = useState(false);
   const [fullName, setFullName] = useState(user?.fullName ?? "");
@@ -354,6 +358,19 @@ export default function ProfileScreen() {
               </Text>
               {rating && rating.count > 0 ? <ChevronRight size={16} color={theme.colors.textMuted} /> : null}
             </View>
+          </Pressable>
+
+          <Pressable
+            style={styles.ratingCard}
+            onPress={() => navigation.navigate("RecurringErrands")}
+            accessibilityRole="button"
+            accessibilityLabel="Repeating errands"
+          >
+            <View style={styles.ratingLeft}>
+              <Repeat size={18} color={theme.colors.primary} />
+              <Text style={styles.ratingLabel}>Repeating errands</Text>
+            </View>
+            <ChevronRight size={16} color={theme.colors.textMuted} />
           </Pressable>
 
           <View style={styles.infoCard}>

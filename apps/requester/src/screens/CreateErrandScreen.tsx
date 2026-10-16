@@ -52,7 +52,21 @@ const SERVER_ERROR_TARGETS = new Set([
   "dropoff",
   "items",
   "estimatedCost",
+  "stops",
 ]);
+
+// Mirrors the API's MAX_EXTRA_STOPS (apps/api/src/schemas/errand.ts).
+const MAX_EXTRA_STOPS = 4;
+
+interface DraftStop {
+  key: string;
+  point: GeoPoint | null;
+  note: string;
+}
+
+function newDraftStop(): DraftStop {
+  return { key: Math.random().toString(36).slice(2), point: null, note: "" };
+}
 
 type RepeatMode = "once" | "repeat";
 
@@ -113,7 +127,12 @@ export default function CreateErrandScreen() {
   const [schedulerStep, setSchedulerStep] = useState<"date" | "time" | null>(null);
   const [pickup, setPickup] = useState<GeoPoint | null>(null);
   const [dropoff, setDropoff] = useState<GeoPoint | null>(null);
-  const [activeField, setActiveField] = useState<"pickup" | "dropoff" | null>(null);
+  // "pickup" | "dropoff" | "stop:<key>" — which location the map picker is editing.
+  const [activeField, setActiveField] = useState<string | null>(null);
+  const [stops, setStops] = useState<DraftStop[]>([]);
+  // Edit mode: an errand that came from a repeat schedule is edited on its own
+  // (the schedule is managed from the Repeating errands screen).
+  const [isFromSchedule, setIsFromSchedule] = useState(false);
   const [items, setItems] = useState<DraftItem[]>([newDraftItem()]);
   const [instructions, setInstructions] = useState("");
   const [estimatedCost, setEstimatedCost] = useState("");
@@ -158,8 +177,14 @@ export default function CreateErrandScreen() {
         );
         setInstructions(errand.instructions ?? "");
         setEstimatedCost(String(errand.estimatedCost));
-        setRepeatMode(errand.isRecurring ? "repeat" : "once");
-        setRecurrenceRule(errand.recurrenceRule ?? null);
+        setStops(
+          (errand.stops ?? []).map((stop) => ({
+            key: stop.id,
+            point: { lat: stop.lat, lng: stop.lng, address: stop.address },
+            note: stop.note ?? "",
+          }))
+        );
+        setIsFromSchedule(!!errand.recurringId);
       } catch {
         if (!cancelled) setLoadFailed(true);
       } finally {
@@ -189,6 +214,19 @@ export default function CreateErrandScreen() {
     setItems((prev) => (prev.length > 1 ? prev.filter((item) => item.key !== key) : prev));
   }
 
+  function updateStop(key: string, patch: Partial<DraftStop>) {
+    setErrors((prev) => (prev.stops ? { ...prev, stops: "" } : prev));
+    setStops((prev) => prev.map((stop) => (stop.key === key ? { ...stop, ...patch } : stop)));
+  }
+
+  function addStop() {
+    setStops((prev) => (prev.length >= MAX_EXTRA_STOPS ? prev : [...prev, newDraftStop()]));
+  }
+
+  function removeStop(key: string) {
+    setStops((prev) => prev.filter((stop) => stop.key !== key));
+  }
+
   function handleAiParsed(draft: AiParsedDraft) {
     setCategory(draft.category);
     setItems(
@@ -212,11 +250,15 @@ export default function CreateErrandScreen() {
     if (urgency === "scheduled" && !scheduledFor) {
       nextErrors.scheduledFor = "Set a time for this errand";
     }
-    if (repeatMode === "repeat" && !recurrenceRule) {
-      nextErrors.recurrenceRule = "Choose how often this repeats";
+    if (!isEditMode && repeatMode === "repeat") {
+      if (!recurrenceRule) nextErrors.recurrenceRule = "Choose how often this repeats";
+      if (urgency === "asap") nextErrors.urgency = "Repeating errands need a start time — choose Scheduled";
     }
     if (!pickup) nextErrors.pickup = "Set a pickup location";
     if (!dropoff) nextErrors.dropoff = "Set a drop-off location";
+    if (stops.some((stop) => !stop.point)) {
+      nextErrors.stops = "Set a location for each extra stop, or remove it";
+    }
 
     const hasNamedItem = items.some((item) => item.name.trim().length > 0);
     if (!hasNamedItem) nextErrors.items = "Add at least one item";
@@ -246,6 +288,18 @@ export default function CreateErrandScreen() {
         scheduledFor: urgency === "scheduled" ? scheduledFor?.toISOString() : undefined,
         pickup,
         dropoff,
+        stops: stops.flatMap((stop) =>
+          stop.point
+            ? [
+                {
+                  lat: stop.point.lat,
+                  lng: stop.point.lng,
+                  address: stop.point.address,
+                  note: stop.note.trim() || undefined,
+                },
+              ]
+            : []
+        ),
         items: items
           .filter((item) => item.name.trim().length > 0)
           .map((item) => ({
@@ -255,8 +309,11 @@ export default function CreateErrandScreen() {
           })),
         instructions: instructions.trim() || undefined,
         estimatedCost: Math.round(Number(estimatedCost)),
-        isRecurring: repeatMode === "repeat",
-        recurrenceRule: repeatMode === "repeat" ? (recurrenceRule ?? undefined) : undefined,
+        // The repeat schedule is set when posting; editing an errand never
+        // changes it (the API ignores these on PATCH).
+        ...(!isEditMode && repeatMode === "repeat"
+          ? { isRecurring: true, recurrenceRule: recurrenceRule ?? undefined }
+          : {}),
         ...(!isEditMode && aiParsed && { aiParsed: true }),
       };
 
@@ -419,14 +476,25 @@ export default function CreateErrandScreen() {
           </View>
         ) : null}
 
-        <PillSelect
-          label="Repeat"
-          options={REPEAT_MODE_OPTIONS}
-          value={repeatMode}
-          onChange={setRepeatMode}
-        />
+        {!isEditMode ? (
+          <PillSelect
+            label="Repeat"
+            options={REPEAT_MODE_OPTIONS}
+            value={repeatMode}
+            onChange={(mode) => {
+              setRepeatMode(mode);
+              // A repeating errand needs a start time, so default to Scheduled.
+              if (mode === "repeat" && urgency !== "scheduled") setUrgency("scheduled");
+            }}
+          />
+        ) : isFromSchedule ? (
+          <Text style={styles.recurrenceHint}>
+            This errand is part of a repeat schedule. Changes here only affect this one — manage
+            the schedule from Repeating errands on your profile.
+          </Text>
+        ) : null}
 
-        {repeatMode === "repeat" ? (
+        {!isEditMode && repeatMode === "repeat" ? (
           <View style={styles.locationFieldWrapper}>
             <PillSelect
               label="How often"
@@ -436,8 +504,9 @@ export default function CreateErrandScreen() {
               error={errors.recurrenceRule}
             />
             <Text style={styles.recurrenceHint}>
-              We'll remember this, but repeat errands aren't posted automatically yet — you'll
-              still need to post each one.
+              We post this errand for you each time, about 2 hours before it's due, and send you a
+              notification to pay. Pause or stop it any time from Repeating errands on your
+              profile.
             </Text>
           </View>
         ) : null}
@@ -455,6 +524,46 @@ export default function CreateErrandScreen() {
           error={errors.dropoff}
           onPress={() => setActiveField("dropoff")}
         />
+
+        <View style={styles.itemsSection}>
+          <Text style={styles.sectionLabel}>Extra stops (optional)</Text>
+          <Text style={styles.recurrenceHint}>
+            Need the runner to pass by somewhere else on the way — a second shop, a pharmacy? They
+            visit these in order after pickup, before drop-off.
+          </Text>
+          {stops.map((stop, index) => (
+            <View key={stop.key} style={styles.stopCard}>
+              <View style={styles.stopHeader}>
+                <Text style={styles.stopTitle}>Stop {index + 1}</Text>
+                <Pressable onPress={() => removeStop(stop.key)} hitSlop={8}>
+                  <Trash2 size={18} color={theme.colors.danger} />
+                </Pressable>
+              </View>
+              <Pressable onPress={() => setActiveField(`stop:${stop.key}`)} style={styles.locationField}>
+                <MapPin size={18} color={theme.colors.primary} />
+                <Text
+                  style={[styles.locationFieldText, !stop.point && styles.locationFieldPlaceholder]}
+                  numberOfLines={1}
+                >
+                  {describeLocation(stop.point) || "Tap to set on map"}
+                </Text>
+              </Pressable>
+              <TextField
+                label="What should they do here? (optional)"
+                value={stop.note}
+                onChangeText={(note) => updateStop(stop.key, { note })}
+                placeholder="e.g. Collect the prescription"
+              />
+            </View>
+          ))}
+          {errors.stops ? <Text style={styles.errorText}>{errors.stops}</Text> : null}
+          {stops.length < MAX_EXTRA_STOPS ? (
+            <Pressable onPress={addStop} style={styles.addItemButton}>
+              <Plus size={18} color={theme.colors.primary} />
+              <Text style={styles.addItemText}>Add a stop</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
         {pickup && dropoff ? <RoutePreview pickup={pickup} dropoff={dropoff} /> : null}
 
@@ -529,12 +638,25 @@ export default function CreateErrandScreen() {
 
       <LocationPickerModal
         visible={activeField !== null}
-        title={activeField === "pickup" ? "Pickup location" : "Drop-off location"}
-        initial={(activeField === "pickup" ? pickup : dropoff) ?? undefined}
+        title={
+          activeField === "pickup"
+            ? "Pickup location"
+            : activeField === "dropoff"
+              ? "Drop-off location"
+              : "Stop location"
+        }
+        initial={
+          (activeField === "pickup"
+            ? pickup
+            : activeField === "dropoff"
+              ? dropoff
+              : stops.find((s) => `stop:${s.key}` === activeField)?.point) ?? undefined
+        }
         onCancel={() => setActiveField(null)}
         onConfirm={(point) => {
           if (activeField === "pickup") setPickup(point);
-          if (activeField === "dropoff") setDropoff(point);
+          else if (activeField === "dropoff") setDropoff(point);
+          else if (activeField?.startsWith("stop:")) updateStop(activeField.slice(5), { point });
           setActiveField(null);
         }}
       />
@@ -659,6 +781,16 @@ const styles = StyleSheet.create({
   },
   locationFieldPlaceholder: { color: theme.colors.textMuted },
   itemsSection: { marginBottom: theme.spacing.md },
+  stopCard: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    marginTop: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
+  },
+  stopHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  stopTitle: { fontFamily: theme.fonts.uiSemibold, fontSize: 14, color: theme.colors.text },
   itemRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   itemNameField: { flex: 3 },
   itemQtyField: { flex: 1 },

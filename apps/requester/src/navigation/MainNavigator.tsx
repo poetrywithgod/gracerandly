@@ -3,6 +3,7 @@ import TabNavigator from "./TabNavigator";
 import CreateErrandScreen from "../screens/CreateErrandScreen";
 import ErrandDetailScreen from "../screens/ErrandDetailScreen";
 import ChatScreen from "../screens/ChatScreen";
+import RecurringErrandsScreen from "../screens/RecurringErrandsScreen";
 import type { MainStackParamList } from "./types";
 
 // ErrandTracking (live runner tracking) lands in later work. Tabs
@@ -26,6 +27,11 @@ export default function MainNavigator() {
         options={{ headerShown: true, title: "Errand" }}
       />
       <Stack.Screen name="Chat" component={ChatScreen} options={{ headerShown: true, title: "Chat" }} />
+      <Stack.Screen
+        name="RecurringErrands"
+        component={RecurringErrandsScreen}
+        options={{ headerShown: true, title: "Repeating errands" }}
+      />
     </Stack.Navigator>
   );
 }

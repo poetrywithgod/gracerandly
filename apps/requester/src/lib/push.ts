@@ -36,6 +36,12 @@ async function ensureAndroidChannels() {
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 250, 250, 250],
   });
+  // Used for "your repeating errand was posted" reminders.
+  await Notifications.setNotificationChannelAsync("errands", {
+    name: "Errand updates",
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0, 300, 200, 300],
+  });
   await Notifications.setNotificationChannelAsync("calls", {
     name: "Calls",
     importance: Notifications.AndroidImportance.HIGH,

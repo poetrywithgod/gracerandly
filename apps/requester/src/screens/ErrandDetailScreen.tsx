@@ -216,6 +216,7 @@ export default function ErrandDetailScreen() {
 
       <Text style={styles.category}>{CATEGORY_LABELS[errand.category]}</Text>
       <Text style={styles.meta}>Posted {formatDateTime(errand.createdAt)}</Text>
+      {errand.recurringId ? <Text style={styles.meta}>Part of a repeating errand</Text> : null}
       {errand.urgency === "scheduled" && errand.scheduledFor ? (
         <Text style={styles.meta}>Scheduled for {formatDateTime(errand.scheduledFor)}</Text>
       ) : null}
@@ -225,6 +226,18 @@ export default function ErrandDetailScreen() {
           {errand.pickup.address ?? `${errand.pickup.lat.toFixed(5)}, ${errand.pickup.lng.toFixed(5)}`}
         </Text>
       </Section>
+
+      {errand.stops.length > 0 ? (
+        <Section title={`Extra stops (${errand.stops.filter((st) => st.completedAt).length}/${errand.stops.length} done)`}>
+          {errand.stops.map((stop, index) => (
+            <Text key={stop.id} style={styles.sectionValue}>
+              {stop.completedAt ? "\u2713 " : `${index + 1}. `}
+              {stop.address ?? `${stop.lat.toFixed(5)}, ${stop.lng.toFixed(5)}`}
+              {stop.note ? ` \u2014 ${stop.note}` : ""}
+            </Text>
+          ))}
+        </Section>
+      ) : null}
 
       <Section title="Drop-off">
         <Text style={styles.sectionValue}>
