@@ -12,7 +12,7 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import type { ErrandItem, GeoPoint, Guarantor, RunnerLocation } from "@gracerandly/shared-types";
+import type { ErrandItem, ErrandStop, GeoPoint, Guarantor, RunnerLocation } from "@gracerandly/shared-types";
 
 // Mirrors packages/shared-types' Gender union.
 export const genderEnum = pgEnum("gender", ["female", "male", "unspecified"]);
@@ -179,6 +179,41 @@ export const errandStatusEnum = pgEnum("errand_status", [
 //
 // estimatedCost/finalCost are whole-Naira integers for now (no kobo
 // precision) — revisit if/when real money handling needs it.
+export const recurrenceFrequencyEnum = pgEnum("recurrence_frequency", ["daily", "weekly", "biweekly", "monthly"]);
+
+// A repeating errand: the template lib/recurring.ts posts a fresh errand from
+// each time nextRunAt comes round (a couple of hours ahead of the time the
+// errand is for). Created when a requester posts an errand with "Repeats"
+// switched on. Deleting one leaves the errands it already posted alone
+// (errands.recurring_id is just cleared).
+export const recurringErrands = pgTable("recurring_errands", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  requesterId: uuid("requester_id")
+    .notNull()
+    .references(() => requesters.id),
+  category: errandCategoryEnum("category").notNull(),
+  frequency: recurrenceFrequencyEnum("frequency").notNull(),
+  pickup: jsonb("pickup").$type<GeoPoint>().notNull(),
+  dropoff: jsonb("dropoff").$type<GeoPoint>().notNull(),
+  stops: jsonb("stops").$type<ErrandStop[]>().notNull().default([]),
+  items: jsonb("items").$type<ErrandItem[]>().notNull(),
+  instructions: text("instructions"),
+  estimatedCost: integer("estimated_cost").notNull(),
+  itemsBudget: integer("items_budget").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  // The time (not the posting time) of the next errand to create. Advancing
+  // it is a compare-and-swap, so a double run can never post the same one twice.
+  nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull(),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
+export type RecurringErrandRow = typeof recurringErrands.$inferSelect;
+
 export const errands = pgTable("errands", {
   id: uuid("id").primaryKey().defaultRandom(),
   requesterId: uuid("requester_id")
@@ -191,10 +226,16 @@ export const errands = pgTable("errands", {
   status: errandStatusEnum("status").notNull().default("pending_match"),
   pickup: jsonb("pickup").$type<GeoPoint>().notNull(),
   dropoff: jsonb("dropoff").$type<GeoPoint>().notNull(),
+  // Extra places to visit after the pickup and before the drop-off, in
+  // order. The runner confirms each one on arrival (routes/runners.ts) and
+  // can't head to the drop-off until all are done.
+  stops: jsonb("stops").$type<ErrandStop[]>().notNull().default([]),
   items: jsonb("items").$type<ErrandItem[]>().notNull(),
   instructions: text("instructions"),
   isRecurring: boolean("is_recurring").notNull().default(false),
   recurrenceRule: text("recurrence_rule"),
+  // Which repeating errand posted this one, if any.
+  recurringId: uuid("recurring_id").references(() => recurringErrands.id, { onDelete: "set null" }),
   estimatedCost: integer("estimated_cost").notNull(),
   // Mirrors packages/shared-types' Errand.itemsBudget comment — money for
   // the runner to actually buy the items, separate from estimatedCost.

@@ -58,6 +58,7 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  const [confirmingStopId, setConfirmingStopId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -126,6 +127,30 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
     }
   }, [errand, token, errandId, pin]);
 
+  // Extra stops are visited in order while the errand is in progress; each is
+  // confirmed on arrival (the API checks the runner is actually there).
+  const handleConfirmStop = useCallback(
+    async (stopId: string) => {
+      if (!token) return;
+      setError(null);
+      setConfirmingStopId(stopId);
+      try {
+        const coordinate = await getCurrentCoordinate();
+        const response = await apiFetch<{ errand: Errand }>(`/runners/errands/${errandId}/stops/${stopId}/complete`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ location: { lat: coordinate.latitude, lng: coordinate.longitude } }),
+        });
+        setErrand(response.errand);
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : "Couldn't confirm this stop");
+      } finally {
+        setConfirmingStopId(null);
+      }
+    },
+    [token, errandId]
+  );
+
   if (isLoading) {
     return (
       <View style={styles.center}>
@@ -143,6 +168,10 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
   }
 
   const step = NEXT_STEP[errand.status];
+  const pendingStops = errand.stops.filter((stop) => !stop.completedAt);
+  const nextStopId = pendingStops[0]?.id;
+  // The drop-off leg can't start until every extra stop is done.
+  const blockedByStops = errand.status === "in_progress" && pendingStops.length > 0;
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -172,6 +201,34 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
         <Text style={styles.sectionLabel}>Drop-off</Text>
         <Text style={styles.address}>{errand.dropoff.address ?? `${errand.dropoff.lat}, ${errand.dropoff.lng}`}</Text>
       </View>
+
+      {errand.stops.length > 0 ? (
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>
+            Extra stops ({errand.stops.length - pendingStops.length}/{errand.stops.length} done)
+          </Text>
+          {errand.stops.map((stop, index) => (
+            <View key={stop.id} style={styles.stopRow}>
+              <Text style={styles.address}>
+                {stop.completedAt ? "\u2713 " : `${index + 1}. `}
+                {stop.address ?? `${stop.lat}, ${stop.lng}`}
+              </Text>
+              {stop.note ? <Text style={styles.stopNote}>{stop.note}</Text> : null}
+              {errand.status === "in_progress" && stop.id === nextStopId ? (
+                <Button
+                  label="I'm here \u2014 confirm stop"
+                  variant="secondary"
+                  loading={confirmingStopId === stop.id}
+                  onPress={() => handleConfirmStop(stop.id)}
+                />
+              ) : null}
+            </View>
+          ))}
+          {errand.status === "in_progress" && pendingStops.length > 0 ? (
+            <Text style={styles.stopNote}>Visit the stops in order, then head to the drop-off.</Text>
+          ) : null}
+        </View>
+      ) : null}
 
       <View style={styles.card}>
         <Text style={styles.sectionLabel}>Items</Text>
@@ -211,7 +268,7 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       {step ? (
-        <Button label={step.label} onPress={handleAdvance} loading={isSubmitting} />
+        <Button label={step.label} onPress={handleAdvance} loading={isSubmitting} disabled={blockedByStops} />
       ) : (
         <Text style={styles.emptyText}>This errand is complete.</Text>
       )}
@@ -234,6 +291,8 @@ const styles = StyleSheet.create({
   cost: { fontFamily: theme.fonts.uiSemibold, fontSize: 20, color: theme.colors.text },
   sectionLabel: { fontFamily: theme.fonts.uiMedium, fontSize: 12, color: theme.colors.textMuted, textTransform: "uppercase", marginTop: 6 },
   address: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.text },
+  stopRow: { gap: 6, marginTop: 4 },
+  stopNote: { fontFamily: theme.fonts.ui, fontSize: 12, color: theme.colors.textMuted },
   itemLine: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.text },
   errorText: { fontFamily: theme.fonts.uiMedium, fontSize: 13, color: theme.colors.danger },
   emptyText: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.textMuted, textAlign: "center" },

@@ -3,7 +3,7 @@ import { randomUUID, randomInt } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
-import { errands, vendorDisbursements, runners } from "../db/schema";
+import { errands, recurringErrands, vendorDisbursements, runners } from "../db/schema";
 import { createErrandSchema, updateErrandSchema, parseErrandTextSchema } from "../schemas/errand";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -11,13 +11,14 @@ import { requireAuth } from "../middleware/requireAuth";
 import { parseErrandFromText } from "../lib/ai";
 import { getAgoraJoinInfo } from "../lib/agora";
 import { notifyNearbyRunners } from "../lib/errand-alerts";
+import { nextOccurrence } from "../lib/recurring";
 import { triggerSos, getActiveSos, resolveSos } from "../lib/sos";
 import { triggerSosSchema } from "../schemas/sos";
 import { sharePositionSchema } from "../schemas/location";
 import { submitReviewSchema } from "../schemas/review";
 import { getReviewState, listReviewsAbout, submitReview } from "../lib/reviews";
 import { LIVE_SHARING_STATUSES, getLivePosition, setLivePosition } from "../lib/live-positions";
-import type { Errand, VendorDisbursement } from "@gracerandly/shared-types";
+import type { Errand, ErrandStop, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
 
@@ -44,6 +45,11 @@ function toVendorDisbursement(row: typeof vendorDisbursements.$inferSelect): Ven
   };
 }
 
+/** Gives each submitted stop an id (the client doesn't generate them). */
+function withStopIds(stops: { lat: number; lng: number; address?: string; note?: string }[] | undefined): ErrandStop[] {
+  return (stops ?? []).map((stop) => ({ ...stop, id: randomUUID() }));
+}
+
 function toErrand(row: typeof errands.$inferSelect): Errand {
   return {
     id: row.id,
@@ -55,10 +61,12 @@ function toErrand(row: typeof errands.$inferSelect): Errand {
     status: row.status,
     pickup: row.pickup,
     dropoff: row.dropoff,
+    stops: row.stops ?? [],
     items: row.items,
     instructions: row.instructions ?? undefined,
     isRecurring: row.isRecurring,
     recurrenceRule: row.recurrenceRule ?? undefined,
+    recurringId: row.recurringId ?? undefined,
     estimatedCost: row.estimatedCost,
     itemsBudget: row.itemsBudget,
     finalCost: row.finalCost ?? undefined,
@@ -104,25 +112,57 @@ router.post(
   asyncHandler(async (req, res) => {
     const input = createErrandSchema.parse(req.body);
 
-    const [row] = await db
-      .insert(errands)
-      .values({
-        requesterId: req.requesterId!,
-        category: input.category,
-        urgency: input.urgency,
-        scheduledFor: input.scheduledFor ? new Date(input.scheduledFor) : undefined,
-        pickup: input.pickup,
-        dropoff: input.dropoff,
-        items: input.items.map((item) => ({ ...item, id: randomUUID() })),
-        instructions: input.instructions,
-        isRecurring: input.isRecurring,
-        recurrenceRule: input.recurrenceRule,
-        estimatedCost: input.estimatedCost,
-        itemsBudget: input.itemsBudget,
-        aiParsed: input.aiParsed ?? false,
-        deliveryPin: generateDeliveryPin(),
-      })
-      .returning();
+    // A repeating errand is two things: the first errand (posted right now,
+    // like any other) and the template that posts the rest on schedule. Both
+    // are created together, so there's never a template with no first errand.
+    const row = await db.transaction(async (tx) => {
+      let recurringId: string | undefined;
+      if (input.isRecurring && input.recurrenceRule && input.scheduledFor) {
+        const firstTime = new Date(input.scheduledFor);
+        const [template] = await tx
+          .insert(recurringErrands)
+          .values({
+            requesterId: req.requesterId!,
+            category: input.category,
+            frequency: input.recurrenceRule,
+            pickup: input.pickup,
+            dropoff: input.dropoff,
+            // Stops are copied without completion marks, with fresh ids per
+            // posted errand (see lib/recurring.ts).
+            stops: withStopIds(input.stops),
+            items: input.items.map((item) => ({ ...item, id: randomUUID() })),
+            instructions: input.instructions,
+            estimatedCost: input.estimatedCost,
+            itemsBudget: input.itemsBudget,
+            nextRunAt: nextOccurrence(firstTime, input.recurrenceRule),
+          })
+          .returning({ id: recurringErrands.id });
+        recurringId = template.id;
+      }
+
+      const [created] = await tx
+        .insert(errands)
+        .values({
+          requesterId: req.requesterId!,
+          category: input.category,
+          urgency: input.urgency,
+          scheduledFor: input.scheduledFor ? new Date(input.scheduledFor) : undefined,
+          pickup: input.pickup,
+          dropoff: input.dropoff,
+          stops: withStopIds(input.stops),
+          items: input.items.map((item) => ({ ...item, id: randomUUID() })),
+          instructions: input.instructions,
+          isRecurring: input.isRecurring,
+          recurrenceRule: input.recurrenceRule,
+          recurringId,
+          estimatedCost: input.estimatedCost,
+          itemsBudget: input.itemsBudget,
+          aiParsed: input.aiParsed ?? false,
+          deliveryPin: generateDeliveryPin(),
+        })
+        .returning();
+      return created;
+    });
 
     // Let nearby online runners know right away (push), so their feed
     // doesn't depend on pull-to-refresh. Best-effort and not awaited.
@@ -195,11 +235,15 @@ router.patch(
         ...(input.items !== undefined && {
           items: input.items.map((item) => ({ ...item, id: randomUUID() })),
         }),
+        ...(input.stops !== undefined && { stops: withStopIds(input.stops) }),
         ...(input.instructions !== undefined && { instructions: input.instructions }),
-        ...(input.isRecurring !== undefined && { isRecurring: input.isRecurring }),
-        ...(input.recurrenceRule !== undefined && { recurrenceRule: input.recurrenceRule }),
+        // isRecurring / recurrenceRule are deliberately not editable here: a
+        // repeating errand is a template (see routes/recurring.ts), and
+        // editing one posted errand only ever changes that one.
         ...(input.estimatedCost !== undefined && { estimatedCost: input.estimatedCost }),
-        ...(input.itemsBudget !== undefined && { itemsBudget: input.itemsBudget }),
+        // The schema's default (0) applies even when the client didn't send
+        // it, so only trust itemsBudget when the body really contained it.
+        ...(req.body?.itemsBudget !== undefined && input.itemsBudget !== undefined && { itemsBudget: input.itemsBudget }),
       })
       .where(eq(errands.id, existing.id))
       .returning();

@@ -314,7 +314,10 @@ function ErrandCard({
       <Text style={styles.cardAddress} numberOfLines={1}>
         Drop-off: {errand.dropoff.address ?? `${errand.dropoff.lat.toFixed(3)}, ${errand.dropoff.lng.toFixed(3)}`}
       </Text>
-      <Text style={styles.cardStatus}>{errand.status.replace(/_/g, " ")}</Text>
+      <Text style={styles.cardStatus}>
+        {errand.status.replace(/_/g, " ")}
+        {errand.stops.length > 0 ? ` \u00b7 +${errand.stops.length} stop${errand.stops.length > 1 ? "s" : ""}` : ""}
+      </Text>
       {actionLabel && onAction ? <Button label={actionLabel} onPress={onAction} style={styles.cardButton} /> : null}
     </Pressable>
   );

@@ -11,9 +11,12 @@ import errandsRouter from "./routes/errands";
 import walletRouter from "./routes/wallet";
 import runnersRouter from "./routes/runners";
 import pushRouter from "./routes/push";
+import recurringRouter from "./routes/recurring";
+import internalRouter from "./routes/internal";
 import { errorHandler } from "./middleware/errorHandler";
 import { attachChatServer } from "./lib/chat-server";
 import { expireStaleAlerts } from "./lib/sos";
+import { runDueRecurring } from "./lib/recurring";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -59,6 +62,8 @@ app.use("/errands", errandsRouter);
 app.use("/wallet", walletRouter);
 app.use("/runners", runnersRouter);
 app.use("/push", pushRouter);
+app.use("/recurring", recurringRouter);
+app.use("/internal", internalRouter);
 
 // Must be registered last — Express identifies error-handling middleware
 // by its four-argument signature.
@@ -78,3 +83,11 @@ const SOS_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const sweepSos = () => expireStaleAlerts().catch((err) => console.error("[sos] sweep failed", err));
 void sweepSos();
 setInterval(sweepSos, SOS_SWEEP_INTERVAL_MS).unref();
+
+// Post repeating errands that have come due (see lib/recurring.ts). The
+// timer only runs while the server is awake — on a free host also set up an
+// outside pinger for /internal/recurring/run (see .env.example, CRON_SECRET).
+const RECURRING_INTERVAL_MS = 60 * 1000;
+const runRecurring = () => runDueRecurring().catch((err) => console.error("[recurring] run failed", err));
+void runRecurring();
+setInterval(runRecurring, RECURRING_INTERVAL_MS).unref();

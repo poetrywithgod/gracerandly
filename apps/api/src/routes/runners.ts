@@ -11,6 +11,7 @@ import {
   updateRunnerStatusSchema,
   availableErrandsQuerySchema,
   updateErrandStatusSchema,
+  completeStopSchema,
   submitVerificationSchema,
   updateRunnerProfileSchema,
   updateRunnerAvatarSchema,
@@ -110,10 +111,12 @@ function toErrand(row: typeof errands.$inferSelect): Errand {
     status: row.status,
     pickup: row.pickup,
     dropoff: row.dropoff,
+    stops: row.stops ?? [],
     items: row.items,
     instructions: row.instructions ?? undefined,
     isRecurring: row.isRecurring,
     recurrenceRule: row.recurrenceRule ?? undefined,
+    recurringId: row.recurringId ?? undefined,
     estimatedCost: row.estimatedCost,
     itemsBudget: row.itemsBudget,
     finalCost: row.finalCost ?? undefined,
@@ -784,6 +787,16 @@ router.patch(
       }
     }
 
+    // Can't set off for the drop-off while there are stops still to visit.
+    if (input.status === "en_route_to_delivery") {
+      const remaining = (existing.stops ?? []).filter((stop) => !stop.completedAt).length;
+      if (remaining > 0) {
+        throw AppErrors.conflict(
+          `You still have ${remaining} stop${remaining === 1 ? "" : "s"} to visit before heading to the drop-off`
+        );
+      }
+    }
+
     if (input.status === "delivered") {
       if (!input.location) throw AppErrors.validation("Location is required to confirm delivery");
       if (!isWithinGeofence(input.location, existing.dropoff)) {
@@ -824,6 +837,44 @@ router.patch(
           )
         );
     }
+
+    res.json({ errand: toErrand(row) });
+  })
+);
+
+// Confirms the runner is at one of the errand's extra stops. Stops are
+// visited in order and, like the pickup and drop-off, only count when the
+// runner's GPS is actually there (PRD 6.4's geofence).
+router.post(
+  "/errands/:id/stops/:stopId/complete",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const { location } = completeStopSchema.parse(req.body);
+    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
+    if (existing.status !== "in_progress") {
+      throw AppErrors.conflict("Stops can only be confirmed once you've picked up and before you head to the drop-off");
+    }
+
+    const stops = existing.stops ?? [];
+    const index = stops.findIndex((stop) => stop.id === req.params.stopId);
+    if (index === -1) throw AppErrors.notFound("Stop not found");
+    if (stops[index].completedAt) throw AppErrors.conflict("You've already confirmed this stop");
+    if (stops.slice(0, index).some((stop) => !stop.completedAt)) {
+      throw AppErrors.conflict("Visit the stops in order — confirm the earlier one first");
+    }
+    if (!isWithinGeofence(location, stops[index])) {
+      throw AppErrors.validation("You need to be at this stop to confirm it");
+    }
+
+    const updatedStops = stops.map((stop, i) => (i === index ? { ...stop, completedAt: new Date().toISOString() } : stop));
+    // Only writes if the stops are still as we read them, so two quick taps
+    // (or a retry) can't undo each other.
+    const [row] = await db
+      .update(errands)
+      .set({ stops: updatedStops })
+      .where(and(eq(errands.id, existing.id), eq(errands.status, "in_progress")))
+      .returning();
+    if (!row) throw AppErrors.conflict("This errand has moved on — refresh and try again");
 
     res.json({ errand: toErrand(row) });
   })

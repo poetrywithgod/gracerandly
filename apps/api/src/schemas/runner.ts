@@ -127,6 +127,14 @@ export type AvailableErrandsQuery = z.infer<typeof availableErrandsQuerySchema>;
 // geofenced transitions (arriving at pickup, arriving at drop-off — see
 // routes/runners.ts); `pin` is required only for the final "delivered"
 // transition.
+// Sent to confirm arriving at one of an errand's extra stops.
+export const completeStopSchema = z.object({
+  location: z.object({
+    lat: z.number().min(-90).max(90),
+    lng: z.number().min(-180).max(180),
+  }),
+});
+
 export const updateErrandStatusSchema = z.object({
   status: z.enum(["en_route_to_pickup", "in_progress", "en_route_to_delivery", "delivered"]),
   location: geoPointSchema.optional(),
