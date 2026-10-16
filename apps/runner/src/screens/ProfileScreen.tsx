@@ -15,7 +15,7 @@ import {
   Star,
 } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
-import type { Errand, VehicleType } from "@gracerandly/shared-types";
+import type { Errand, TrustTierSummary, VehicleType } from "@gracerandly/shared-types";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
 import Button from "../components/Button";
@@ -128,6 +128,7 @@ export default function ProfileScreen() {
   const [errands, setErrands] = useState<Errand[] | null>(null);
   const [earnings, setEarnings] = useState<EarningsResponse | null>(null);
   const [rating, setRating] = useState<{ average: number | null; count: number } | null>(null);
+  const [trust, setTrust] = useState<TrustTierSummary | null>(null);
   const [showReviews, setShowReviews] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
@@ -140,7 +141,7 @@ export default function ProfileScreen() {
       if (isRefresh) setIsRefreshing(true);
       setStatsError(null);
       try {
-        const [errandsResponse, earningsResponse, ratingResponse] = await Promise.all([
+        const [errandsResponse, earningsResponse, ratingResponse, trustResponse] = await Promise.all([
           apiFetch<{ errands: Errand[] }>("/runners/errands/mine", {
             headers: { Authorization: `Bearer ${token}` },
           }),
@@ -151,7 +152,11 @@ export default function ProfileScreen() {
           apiFetch<{ average: number | null; count: number }>("/runners/me/rating", {
             headers: { Authorization: `Bearer ${token}` },
           }).catch(() => null),
+          apiFetch<TrustTierSummary>("/runners/me/trust-tier", {
+            headers: { Authorization: `Bearer ${token}` },
+          }).catch(() => null),
         ]);
+        setTrust(trustResponse);
         setErrands(errandsResponse.errands);
         setEarnings(earningsResponse);
         setRating(ratingResponse);
@@ -498,10 +503,36 @@ export default function ProfileScreen() {
 
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Trust tier</Text>
-            <Text style={styles.tierValue}>{TIER_LABELS[user.trustTierId] ?? user.trustTierId}</Text>
-            <Text style={styles.tierHint}>
-              Higher tiers unlock higher-value errands as you complete more clean, on-time deliveries.
+            <Text style={styles.tierValue}>
+              {TIER_LABELS[trust?.tier.level ?? user.trustTierId] ?? user.trustTierId}
             </Text>
+            {trust ? (
+              <>
+                <Text style={styles.tierLine}>
+                  Errands up to {formatNaira(trust.tier.maxErrandValue)}
+                  {trust.tier.maxCashFloat > 0
+                    ? ` · pay vendors from your own cash up to ${formatNaira(trust.tier.maxCashFloat)}`
+                    : " · paying vendors from your own cash isn't unlocked yet"}
+                </Text>
+                <Text style={styles.tierLine}>
+                  {trust.tier.completedErrands} delivered · {Math.round(trust.tier.cleanCompletionRate * 100)}% clean
+                </Text>
+                {trust.next ? (
+                  <Text style={styles.tierHint}>
+                    {trust.next.errandsToGo > 0
+                      ? `${trust.next.errandsToGo} more delivered errand${trust.next.errandsToGo === 1 ? "" : "s"} to reach ${TIER_LABELS[trust.next.level]}`
+                      : `Keep ${Math.round(trust.next.minCleanCompletionRate * 100)}% or more of your deliveries clean to reach ${TIER_LABELS[trust.next.level]}`}
+                    {` — errands up to ${formatNaira(trust.next.maxErrandValue)} and ${formatNaira(trust.next.maxCashFloat)} of your own cash.`}
+                  </Text>
+                ) : (
+                  <Text style={styles.tierHint}>You're at the top tier.</Text>
+                )}
+              </>
+            ) : (
+              <Text style={styles.tierHint}>
+                Higher tiers unlock higher-value errands as you complete more clean, on-time deliveries.
+              </Text>
+            )}
           </View>
 
           <Button label="Edit profile" variant="ghost" onPress={startEditingProfile} style={styles.editProfileButton} />
@@ -681,6 +712,7 @@ const styles = StyleSheet.create({
 
   sectionTitle: { fontFamily: theme.fonts.uiMedium, fontSize: 13, color: theme.colors.textMuted, textTransform: "uppercase" },
   tierValue: { fontFamily: theme.fonts.uiSemibold, fontSize: 20, color: theme.colors.primaryDark, marginTop: 4 },
+  tierLine: { fontFamily: theme.fonts.uiMedium, fontSize: 13, color: theme.colors.text, marginTop: 6 },
   tierHint: { fontFamily: theme.fonts.ui, fontSize: 12, color: theme.colors.textMuted, marginTop: 6 },
 
   editProfileButton: { alignSelf: "stretch", marginBottom: theme.spacing.sm },

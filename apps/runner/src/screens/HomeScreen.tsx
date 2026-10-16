@@ -4,7 +4,7 @@ import { useFocusEffect, useNavigation, type CompositeNavigationProp } from "@re
 import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
-import type { Errand } from "@gracerandly/shared-types";
+import type { Errand, TrustTier } from "@gracerandly/shared-types";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
 import { requestLiveLocationRefresh } from "../lib/liveLocation";
@@ -43,6 +43,8 @@ export default function HomeScreen() {
   const [myErrands, setMyErrands] = useState<Errand[]>([]);
   const [available, setAvailable] = useState<Errand[]>([]);
   const [radiusMiles, setRadiusMiles] = useState<number | null>(null);
+  // The runner's trust tier — errands worth more than it allows are shown but locked.
+  const [tier, setTier] = useState<TrustTier | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isTogglingOnline, setIsTogglingOnline] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,12 +72,13 @@ export default function HomeScreen() {
           lat: String(user.currentLocation.lat),
           lng: String(user.currentLocation.lng),
         });
-        const availableResponse = await apiFetch<{ errands: Errand[]; radiusMiles: number | null }>(
+        const availableResponse = await apiFetch<{ errands: Errand[]; radiusMiles: number | null; tier?: TrustTier }>(
           `/runners/errands/available?${params.toString()}`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         setAvailable(availableResponse.errands);
         setRadiusMiles(availableResponse.radiusMiles);
+        if (availableResponse.tier) setTier(availableResponse.tier);
 
         // First load just records what's there; after that, anything not seen before is "new".
         const ids = availableResponse.errands.map((e) => e.id);
@@ -268,6 +271,11 @@ export default function HomeScreen() {
           actionLabel="Accept"
           onAction={() => handleAccept(item.id)}
           isNew={newIds.has(item.id)}
+          lockedMessage={
+            tier && item.estimatedCost + item.itemsBudget > tier.maxErrandValue
+              ? `Worth ₦${(item.estimatedCost + item.itemsBudget).toLocaleString()} — above your ₦${tier.maxErrandValue.toLocaleString()} limit. Complete more errands to unlock it.`
+              : undefined
+          }
         />
       )}
       ListFooterComponent={
@@ -292,12 +300,14 @@ function ErrandCard({
   actionLabel,
   onAction,
   isNew,
+  lockedMessage,
 }: {
   errand: Errand;
   onPress: () => void;
   actionLabel?: string;
   onAction?: () => void;
   isNew?: boolean;
+  lockedMessage?: string;
 }) {
   return (
     <Pressable style={styles.card} onPress={onPress}>
@@ -318,12 +328,17 @@ function ErrandCard({
         {errand.status.replace(/_/g, " ")}
         {errand.stops.length > 0 ? ` \u00b7 +${errand.stops.length} stop${errand.stops.length > 1 ? "s" : ""}` : ""}
       </Text>
-      {actionLabel && onAction ? <Button label={actionLabel} onPress={onAction} style={styles.cardButton} /> : null}
+      {lockedMessage ? (
+        <Text style={styles.lockedText}>{lockedMessage}</Text>
+      ) : actionLabel && onAction ? (
+        <Button label={actionLabel} onPress={onAction} style={styles.cardButton} />
+      ) : null}
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
+  lockedText: { fontFamily: theme.fonts.uiMedium, fontSize: 12, color: theme.colors.textMuted, marginTop: 8 },
   list: { padding: theme.spacing.lg, gap: theme.spacing.sm },
   toggleCard: {
     flexDirection: "row",

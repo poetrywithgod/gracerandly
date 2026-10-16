@@ -8,6 +8,20 @@ export interface TrustTier {
   cleanCompletionRate: number;
 }
 
+/** A runner's tier plus what it takes to reach the next one (unset at the top tier). */
+export interface TrustTierSummary {
+  tier: TrustTier;
+  next?: {
+    level: TrustTierLevel;
+    /** Delivered errands still needed. */
+    errandsToGo: number;
+    /** Share of deliveries (0-1) that must be free of confirmed incidents. */
+    minCleanCompletionRate: number;
+    maxErrandValue: number;
+    maxCashFloat: number;
+  };
+}
+
 export type IncidentType =
   | "geofence_mismatch"
   | "route_deviation"

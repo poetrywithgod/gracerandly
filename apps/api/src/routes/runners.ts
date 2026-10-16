@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { db } from "../db/client";
@@ -37,6 +37,7 @@ import { resolveBankCode, resolveAccountNumber, createTransferRecipient, initiat
 import { getAgoraJoinInfo } from "../lib/agora";
 import { triggerSos, getActiveSos, resolveSos } from "../lib/sos";
 import { triggerSosSchema } from "../schemas/sos";
+import { TIER_LABELS, errandValue, refreshRunnerTier } from "../lib/trust";
 import type { Errand, ErrandStatus, Runner, RunnerPayout, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -249,6 +250,15 @@ router.get(
     const row = await loadOwnRunner(req.runnerId!);
     const activeErrandCount = await countActiveErrands(row.id);
     res.json({ user: { ...toRunner(row), activeErrandCount } });
+  })
+);
+
+// The runner's trust tier and what it takes to reach the next one — see lib/trust.ts.
+router.get(
+  "/me/trust-tier",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await refreshRunnerTier(req.runnerId!));
   })
 );
 
@@ -657,8 +667,11 @@ router.get(
     const { lat, lng } = availableErrandsQuerySchema.parse(req.query);
 
     const activeCount = await countActiveErrands(req.runnerId!);
+    // The tier travels with the list so the app can mark errands that are
+    // above this runner's limit (accepting one is refused anyway).
+    const { tier } = await refreshRunnerTier(req.runnerId!);
     if (activeCount >= MAX_CONCURRENT_ERRANDS) {
-      res.json({ errands: [], radiusMiles: null, atCapacity: true });
+      res.json({ errands: [], radiusMiles: null, atCapacity: true, tier });
       return;
     }
 
@@ -675,6 +688,7 @@ router.get(
           errands: withinStep.map((x) => toErrand(x.row)),
           radiusMiles,
           atCapacity: false,
+          tier,
         });
         return;
       }
@@ -687,6 +701,7 @@ router.get(
       errands: [],
       radiusMiles: MATCHING_RADIUS_STEPS_MILES[MATCHING_RADIUS_STEPS_MILES.length - 1],
       atCapacity: false,
+      tier,
     });
   })
 );
@@ -719,13 +734,34 @@ router.post(
       throw AppErrors.conflict(`You already have ${MAX_CONCURRENT_ERRANDS} active errands`);
     }
 
+    // Bigger errands are earned: an errand worth more than the runner's tier
+    // allows (delivery fee + the items money they'd handle) is refused with
+    // a message that says how to unlock it. Unknown/taken errands fall
+    // through to the "already taken" message below.
+    const errandId = parseErrandId(req.params.id);
+    const [candidate] = await db
+      .select({ estimatedCost: errands.estimatedCost, itemsBudget: errands.itemsBudget })
+      .from(errands)
+      .where(and(eq(errands.id, errandId), eq(errands.status, "pending_match")))
+      .limit(1);
+    if (candidate) {
+      const { tier, next } = await refreshRunnerTier(req.runnerId!);
+      const value = errandValue(candidate);
+      if (value > tier.maxErrandValue) {
+        throw AppErrors.conflict(
+          `This errand is worth ₦${value.toLocaleString("en-NG")}, above the ₦${tier.maxErrandValue.toLocaleString("en-NG")} limit for ${TIER_LABELS[tier.level]} runners.` +
+            (next ? ` Complete ${next.errandsToGo > 0 ? `${next.errandsToGo} more errand${next.errandsToGo === 1 ? "" : "s"}` : "more errands"} to reach ${TIER_LABELS[next.level]}.` : "")
+        );
+      }
+    }
+
     // Accept is a compare-and-swap: only succeeds if the errand is still
     // pending_match, so two runners racing to accept the same errand can't
     // both win — the loser's UPDATE just matches zero rows.
     const [row] = await db
       .update(errands)
       .set({ runnerId: req.runnerId!, status: "accepted" })
-      .where(and(eq(errands.id, parseErrandId(req.params.id)), eq(errands.status, "pending_match")))
+      .where(and(eq(errands.id, errandId), eq(errands.status, "pending_match")))
       .returning();
 
     if (!row) {
@@ -826,16 +862,57 @@ router.patch(
       // disbursement is a separate step the runner requests themselves
       // (POST /me/payout), which is what moves this row from "released" to
       // "disbursed".
-      await db
-        .update(escrowTransactions)
-        .set({ status: "released", releasedAt: new Date() })
-        .where(
-          and(
-            eq(escrowTransactions.errandId, row.id),
-            eq(escrowTransactions.runnerId, req.runnerId!),
-            eq(escrowTransactions.status, "escrowed")
+      //
+      // Also settles the runner's cash float for this errand: money they
+      // paid vendors out of their own pocket (see the vendor-disbursements
+      // route) is added to this payout, so it reaches them the same way
+      // their earnings do, and counts against the items budget.
+      //
+      // The escrow row is matched on runnerId being this runner *or not set
+      // yet*: a requester can pay after a runner accepted, and older rows
+      // from before that was handled have no runner on them.
+      await db.transaction(async (tx) => {
+        const released = await tx
+          .update(escrowTransactions)
+          .set({ status: "released", releasedAt: new Date(), runnerId: req.runnerId! })
+          .where(
+            and(
+              eq(escrowTransactions.errandId, row.id),
+              or(eq(escrowTransactions.runnerId, req.runnerId!), isNull(escrowTransactions.runnerId)),
+              eq(escrowTransactions.status, "escrowed")
+            )
           )
-        );
+          .returning({ id: escrowTransactions.id });
+        if (released.length === 0) return;
+
+        const floatRows = await tx
+          .update(vendorDisbursements)
+          .set({ status: "success", completedAt: new Date() })
+          .where(
+            and(
+              eq(vendorDisbursements.errandId, row.id),
+              eq(vendorDisbursements.runnerId, req.runnerId!),
+              eq(vendorDisbursements.method, "cash_float"),
+              eq(vendorDisbursements.status, "pending")
+            )
+          )
+          .returning({ amount: vendorDisbursements.amount });
+        const reimbursement = floatRows.reduce((sum, r) => sum + r.amount, 0);
+        if (reimbursement > 0) {
+          await tx
+            .update(escrowTransactions)
+            .set({
+              itemsSpent: sql`${escrowTransactions.itemsSpent} + ${reimbursement}`,
+              runnerPayout: sql`${escrowTransactions.runnerPayout} + ${reimbursement}`,
+            })
+            .where(eq(escrowTransactions.id, released[0].id));
+        }
+      });
+
+      // One more delivered errand may move the runner up a tier.
+      void refreshRunnerTier(req.runnerId!).catch((err) =>
+        console.error("[trust] couldn't refresh tier", err instanceof Error ? err.message : err)
+      );
     }
 
     res.json({ errand: toErrand(row) });
@@ -894,8 +971,8 @@ router.post(
     const input = createVendorDisbursementSchema.parse(req.body);
     const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
 
-    if (input.method !== "bank_transfer") {
-      throw AppErrors.validation(`${input.method.replace("_", " ")} isn't available yet — use bank transfer for now`);
+    if (input.method !== "bank_transfer" && input.method !== "cash_float") {
+      throw AppErrors.validation(`${input.method.replace("_", " ")} isn't available yet — use bank transfer or cash float for now`);
     }
     if (existing.status !== "in_progress") {
       throw AppErrors.conflict("You can only pay a vendor while an errand is in progress");
@@ -918,6 +995,54 @@ router.post(
     const remaining = transaction.itemsBudget - transaction.itemsSpent - pendingTotal;
     if (input.amount > remaining) {
       throw AppErrors.validation(`Only ₦${remaining.toLocaleString()} left of this errand's items budget`);
+    }
+
+    // Cash float: the runner pays the vendor from their own pocket and is
+    // paid back with their errand payout once it's delivered (see the
+    // delivered branch of PATCH /errands/:id/status). Nothing moves now, so
+    // the row stays "pending" until then. How much cash they can have out
+    // at once depends on their trust tier.
+    if (input.method === "cash_float") {
+      const { tier, next } = await refreshRunnerTier(req.runnerId!);
+      if (tier.maxCashFloat <= 0) {
+        throw AppErrors.conflict(
+          `Paying from your own cash unlocks at ${next ? TIER_LABELS[next.level] : "a higher"} tier — keep completing errands.`
+        );
+      }
+      const outRows = await db
+        .select({ amount: vendorDisbursements.amount })
+        .from(vendorDisbursements)
+        .where(
+          and(
+            eq(vendorDisbursements.runnerId, req.runnerId!),
+            eq(vendorDisbursements.method, "cash_float"),
+            eq(vendorDisbursements.status, "pending")
+          )
+        );
+      const outstanding = outRows.reduce((sum, row) => sum + row.amount, 0);
+      if (outstanding + input.amount > tier.maxCashFloat) {
+        const room = Math.max(0, tier.maxCashFloat - outstanding);
+        throw AppErrors.validation(
+          `You can have up to ₦${tier.maxCashFloat.toLocaleString("en-NG")} of your own cash out at once (₦${room.toLocaleString("en-NG")} left).`,
+          { amount: `Over your cash float limit — ₦${room.toLocaleString("en-NG")} left` }
+        );
+      }
+
+      const [floatRow] = await db
+        .insert(vendorDisbursements)
+        .values({
+          errandId: existing.id,
+          runnerId: req.runnerId!,
+          vendorName: input.vendorName,
+          method: "cash_float",
+          amount: input.amount,
+          status: "pending",
+          receiptPhotoUrl: input.receiptPhotoUrl,
+          geoVerified: input.location ? isWithinGeofence(input.location, existing.pickup) : false,
+        })
+        .returning();
+      res.status(201).json({ disbursement: toVendorDisbursement(floatRow) });
+      return;
     }
 
     // Unlike a runner's own payout account, there's no "save unverified,

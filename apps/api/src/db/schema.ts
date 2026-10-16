@@ -397,6 +397,39 @@ export const vendorDisbursements = pgTable("vendor_disbursements", {
 export type VendorDisbursementRow = typeof vendorDisbursements.$inferSelect;
 export type NewVendorDisbursementRow = typeof vendorDisbursements.$inferInsert;
 
+// Mirrors packages/shared-types' IncidentType union.
+export const trustIncidentTypeEnum = pgEnum("trust_incident_type", [
+  "geofence_mismatch",
+  "route_deviation",
+  "theft_confirmed",
+  "dispute_lost",
+  "sos_triggered",
+  "other",
+]);
+
+// Mirrors packages/shared-types' TrustIncident. A row only counts against a
+// runner's trust tier once `confirmed` is true (lib/trust.ts) — an
+// unconfirmed one is just a flag waiting for review. There is no admin tool
+// to review them yet, so for now confirmation is done by hand in the
+// database; the admin dashboard will own this later. reviewedByAdminId is
+// plain text until an admin users table exists.
+export const trustIncidents = pgTable(
+  "trust_incidents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runnerId: uuid("runner_id")
+      .notNull()
+      .references(() => runners.id, { onDelete: "cascade" }),
+    errandId: uuid("errand_id").references(() => errands.id, { onDelete: "set null" }),
+    type: trustIncidentTypeEnum("type").notNull(),
+    description: text("description").notNull(),
+    confirmed: boolean("confirmed").notNull().default(false),
+    reviewedByAdminId: text("reviewed_by_admin_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("trust_incidents_runner_idx").on(table.runnerId)]
+);
+
 // Mirrors packages/shared-types' ChatMessage's senderRole field.
 export const chatSenderRoleEnum = pgEnum("chat_sender_role", ["requester", "runner"]);
 

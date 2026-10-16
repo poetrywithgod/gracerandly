@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
-import type { Errand, ErrandStatus } from "@gracerandly/shared-types";
+import type { Errand, ErrandStatus, VendorDisbursement } from "@gracerandly/shared-types";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
 import { getCurrentCoordinate } from "../lib/location";
@@ -59,6 +59,13 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
   const [pinError, setPinError] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [confirmingStopId, setConfirmingStopId] = useState<string | null>(null);
+  // Cash float: purchases the runner paid for from their own pocket on this errand.
+  const [floatPayments, setFloatPayments] = useState<VendorDisbursement[]>([]);
+  const [vendorName, setVendorName] = useState("");
+  const [vendorAmount, setVendorAmount] = useState("");
+  const [vendorErrors, setVendorErrors] = useState<{ vendorName?: string; amount?: string }>({});
+  const [vendorError, setVendorError] = useState<string | null>(null);
+  const [isLoggingPayment, setIsLoggingPayment] = useState(false);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -80,6 +87,59 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
   useEffect(() => {
     load();
   }, [load]);
+
+  const loadFloatPayments = useCallback(async () => {
+    if (!token) return;
+    try {
+      const response = await apiFetch<{ disbursements: VendorDisbursement[] }>(
+        `/runners/errands/${errandId}/vendor-disbursements`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setFloatPayments(response.disbursements.filter((d) => d.method === "cash_float"));
+    } catch {
+      // Nice-to-have list — the rest of the screen still works without it.
+    }
+  }, [token, errandId]);
+
+  useEffect(() => {
+    loadFloatPayments();
+  }, [loadFloatPayments]);
+
+  const handleLogCashPayment = useCallback(async () => {
+    if (!token) return;
+    setVendorError(null);
+    const amount = Math.round(Number(vendorAmount));
+    const nextErrors: { vendorName?: string; amount?: string } = {};
+    if (!vendorName.trim()) nextErrors.vendorName = "Enter the shop or vendor's name";
+    if (!Number.isFinite(amount) || amount <= 0) nextErrors.amount = "Enter how much you paid, in Naira";
+    setVendorErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    setIsLoggingPayment(true);
+    try {
+      // Where you are is only used as a trust signal (were you at the shop?) — never blocks the payment.
+      const location = await getCurrentCoordinate()
+        .then((c) => ({ lat: c.latitude, lng: c.longitude }))
+        .catch(() => undefined);
+      await apiFetch(`/runners/errands/${errandId}/vendor-disbursements`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ vendorName: vendorName.trim(), method: "cash_float", amount, location }),
+      });
+      setVendorName("");
+      setVendorAmount("");
+      setVendorErrors({});
+      await loadFloatPayments();
+    } catch (err) {
+      if (err instanceof ApiError && err.fields?.amount) {
+        setVendorErrors({ amount: err.fields.amount });
+      } else {
+        setVendorError(err instanceof ApiError ? err.message : "Couldn't log this payment");
+      }
+    } finally {
+      setIsLoggingPayment(false);
+    }
+  }, [token, errandId, vendorName, vendorAmount, loadFloatPayments]);
 
   const handleAdvance = useCallback(async () => {
     if (!errand || !token) return;
@@ -227,6 +287,50 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
           {errand.status === "in_progress" && pendingStops.length > 0 ? (
             <Text style={styles.stopNote}>Visit the stops in order, then head to the drop-off.</Text>
           ) : null}
+        </View>
+      ) : null}
+
+      {(errand.status === "in_progress" && errand.itemsBudget > 0) || floatPayments.length > 0 ? (
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>Paid from your own cash</Text>
+          {errand.status === "in_progress" && errand.itemsBudget > 0 ? (
+            <>
+              <Text style={styles.stopNote}>
+                Paying a shop with your own cash? Log it here — you'll be paid back with your errand payout once it's
+                delivered, up to the ₦{errand.itemsBudget.toLocaleString()} items budget. How much you can have out at once
+                depends on your trust tier.
+              </Text>
+              <TextField
+                label="Shop / vendor"
+                value={vendorName}
+                onChangeText={(next) => {
+                  setVendorName(next);
+                  setVendorErrors((prev) => ({ ...prev, vendorName: undefined }));
+                }}
+                placeholder="e.g. Mama Put, Shoprite"
+                error={vendorErrors.vendorName}
+              />
+              <TextField
+                label="Amount you paid (₦)"
+                value={vendorAmount}
+                onChangeText={(next) => {
+                  setVendorAmount(next);
+                  setVendorErrors((prev) => ({ ...prev, amount: undefined }));
+                }}
+                keyboardType="number-pad"
+                placeholder="e.g. 3000"
+                error={vendorErrors.amount}
+              />
+              {vendorError ? <Text style={styles.errorText}>{vendorError}</Text> : null}
+              <Button label="Log cash payment" variant="secondary" loading={isLoggingPayment} onPress={handleLogCashPayment} />
+            </>
+          ) : null}
+          {floatPayments.map((payment) => (
+            <Text key={payment.id} style={styles.itemLine}>
+              • {payment.vendorName} — ₦{payment.amount.toLocaleString()}
+              {payment.status === "success" ? " (paid back)" : " (paid back on delivery)"}
+            </Text>
+          ))}
         </View>
       ) : null}
 

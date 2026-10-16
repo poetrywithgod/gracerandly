@@ -24,6 +24,8 @@ export const createVendorDisbursementSchema = z
     // Where the runner is right now — used for the geoVerified audit flag,
     // never required to succeed (see vendorDisbursements.geoVerified).
     location: geoPointInputSchema.optional(),
+    // A photo of the receipt, for cash float purchases (optional for now).
+    receiptPhotoUrl: z.string().trim().url().max(2000).optional(),
   })
   .superRefine((data, ctx) => {
     if (data.method === "bank_transfer" && (!data.bankName || !data.accountNumber || !data.accountName)) {

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
 import { escrowTransactions, errands, requesters, runnerPayouts, vendorDisbursements } from "../db/schema";
@@ -73,6 +73,24 @@ async function settleTransaction(
     .update(escrowTransactions)
     .set({ status: "escrowed" })
     .where(and(eq(escrowTransactions.id, transactionId), eq(escrowTransactions.status, "pending")));
+
+  // If a runner already accepted this errand before it was paid (repeating
+  // errands are posted unpaid, and requesters can pay late), attach them to
+  // the payment now — otherwise it could never be released to them.
+  const [paid] = await db
+    .select({ errandId: escrowTransactions.errandId })
+    .from(escrowTransactions)
+    .where(eq(escrowTransactions.id, transactionId))
+    .limit(1);
+  if (paid) {
+    const [errand] = await db.select({ runnerId: errands.runnerId }).from(errands).where(eq(errands.id, paid.errandId)).limit(1);
+    if (errand?.runnerId) {
+      await db
+        .update(escrowTransactions)
+        .set({ runnerId: errand.runnerId })
+        .where(and(eq(escrowTransactions.id, transactionId), isNull(escrowTransactions.runnerId)));
+    }
+  }
   return "escrowed" as const;
 }
 
