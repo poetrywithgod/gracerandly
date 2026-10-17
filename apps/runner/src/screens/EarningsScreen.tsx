@@ -15,6 +15,8 @@ const theme = getTheme("light");
 interface Earnings {
   totalEarned: number;
   availableBalance: number;
+  /** Referral bonus included in availableBalance. */
+  referralBonus?: number;
   pendingBalance: number;
   totalPaidOut: number;
   completedErrandsCount: number;
@@ -132,6 +134,9 @@ export default function EarningsScreen() {
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Available to withdraw</Text>
         <Text style={styles.balanceValue}>{earnings ? formatNaira(available) : "—"}</Text>
+        {earnings && (earnings.referralBonus ?? 0) > 0 ? (
+          <Text style={styles.pendingText}>Includes {formatNaira(earnings.referralBonus ?? 0)} referral bonus</Text>
+        ) : null}
         {earnings && earnings.pendingBalance > 0 ? (
           <View style={styles.pendingRow}>
             <Clock size={14} color="#fff" />

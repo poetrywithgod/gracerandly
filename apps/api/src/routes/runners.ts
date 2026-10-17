@@ -38,6 +38,16 @@ import { getAgoraJoinInfo } from "../lib/agora";
 import { triggerSos, getActiveSos, resolveSos } from "../lib/sos";
 import { triggerSosSchema } from "../schemas/sos";
 import { TIER_LABELS, errandValue, refreshRunnerTier } from "../lib/trust";
+import {
+  availableRunnerBonus,
+  findCodeOwner,
+  getReferralSummary,
+  normalizeReferralCode,
+  qualifyReferralsForDelivery,
+  recordReferral,
+  releaseRunnerBonus,
+  reserveRunnerBonus,
+} from "../lib/referrals";
 import type { Errand, ErrandStatus, Runner, RunnerPayout, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -210,6 +220,14 @@ router.post(
       throw AppErrors.conflict(message, { [isPhone ? "phone" : "email"]: message });
     }
 
+    // A referral code that doesn't exist stops the signup (before an account
+    // is created) so the person can fix a typo; leaving it blank is fine.
+    const referralCode = normalizeReferralCode(input.referralCode);
+    if (referralCode && !(await findCodeOwner(referralCode))) {
+      const message = "That referral code isn't valid — check it or leave it blank";
+      throw AppErrors.validation(message, { referralCode: message });
+    }
+
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_SALT_ROUNDS);
 
     const [row] = await db
@@ -221,6 +239,8 @@ router.post(
         passwordHash,
       })
       .returning();
+
+    if (referralCode) await recordReferral(referralCode, "runner", row.id);
 
     const token = signAuthToken({ sub: row.id, role: "runner" });
     res.status(201).json({ token, user: toRunner(row) });
@@ -259,6 +279,16 @@ router.get(
   requireRunnerAuth,
   asyncHandler(async (req, res) => {
     res.json(await refreshRunnerTier(req.runnerId!));
+  })
+);
+
+// The runner's referral code, how their invites are doing, and the cash
+// bonus they've earned — see lib/referrals.ts.
+router.get(
+  "/me/referral",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await getReferralSummary("runner", req.runnerId!));
   })
 );
 
@@ -400,18 +430,28 @@ router.post(
       .from(escrowTransactions)
       .where(and(eq(escrowTransactions.runnerId, req.runnerId!), eq(escrowTransactions.status, "released")));
 
-    const amount = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
+    // Referral bonuses ride along with the earnings: claim them for this
+    // payout up front (so two payout requests can't both take them) and put
+    // them back if anything below fails.
+    const payoutId = randomUUID();
+    const bonus = await reserveRunnerBonus(runner.id, payoutId);
+    const amount = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0) + bonus;
     if (amount <= 0) {
       throw AppErrors.validation("Nothing to pay out yet");
     }
 
     let recipientCode = runner.paystackRecipientCode;
     if (!recipientCode) {
-      recipientCode = await createTransferRecipient({
-        accountNumber: runner.bankAccountNumber,
-        bankCode: runner.bankCode,
-        accountName: runner.bankAccountName,
-      });
+      try {
+        recipientCode = await createTransferRecipient({
+          accountNumber: runner.bankAccountNumber,
+          bankCode: runner.bankCode,
+          accountName: runner.bankAccountName,
+        });
+      } catch (err) {
+        await releaseRunnerBonus(payoutId);
+        throw err;
+      }
       await db.update(runners).set({ paystackRecipientCode: recipientCode }).where(eq(runners.id, runner.id));
     }
 
@@ -421,6 +461,7 @@ router.post(
     const [payoutRow] = await db
       .insert(runnerPayouts)
       .values({
+        id: payoutId,
         runnerId: runner.id,
         amount,
         status: "pending",
@@ -441,6 +482,7 @@ router.post(
         .update(runnerPayouts)
         .set({ status: "failed", failureReason: err instanceof Error ? err.message : "Transfer failed" })
         .where(eq(runnerPayouts.id, payoutRow.id));
+      await releaseRunnerBonus(payoutId);
       throw AppErrors.validation("Couldn't start the transfer — try again in a moment");
     }
 
@@ -512,6 +554,8 @@ router.get(
       .filter((row) => row.status === "released" && !inFlightIds.has(row.id))
       .reduce((sum, row) => sum + row.runnerPayout, 0);
     const totalPaidOut = successPayouts.reduce((sum, row) => sum + row.amount, 0);
+    // Referral bonuses not yet withdrawn are part of what the runner can take out.
+    const referralBonus = await availableRunnerBonus(req.runnerId!);
 
     // Money already paid by requesters for errands this runner has accepted
     // but not yet delivered — held in escrow, released when delivery is
@@ -524,7 +568,8 @@ router.get(
 
     res.json({
       totalEarned,
-      availableBalance,
+      availableBalance: availableBalance + referralBonus,
+      referralBonus,
       pendingBalance,
       totalPaidOut,
       completedErrandsCount: completedRows.length,
@@ -907,6 +952,20 @@ router.patch(
             })
             .where(eq(escrowTransactions.id, released[0].id));
         }
+      });
+
+      // A first paid delivery can complete a referral for the requester or
+      // the runner (see lib/referrals.ts).
+      const [released] = await db
+        .select({ id: escrowTransactions.id })
+        .from(escrowTransactions)
+        .where(and(eq(escrowTransactions.errandId, row.id), eq(escrowTransactions.status, "released")))
+        .limit(1);
+      void qualifyReferralsForDelivery({
+        requesterId: row.requesterId,
+        runnerId: row.runnerId,
+        estimatedCost: row.estimatedCost,
+        paid: !!released,
       });
 
       // One more delivered errand may move the runner up a tier.

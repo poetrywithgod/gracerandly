@@ -4,6 +4,9 @@ import CreateErrandScreen from "../screens/CreateErrandScreen";
 import ErrandDetailScreen from "../screens/ErrandDetailScreen";
 import ChatScreen from "../screens/ChatScreen";
 import RecurringErrandsScreen from "../screens/RecurringErrandsScreen";
+import SupportListScreen from "../screens/SupportListScreen";
+import SupportNewScreen from "../screens/SupportNewScreen";
+import SupportThreadScreen from "../screens/SupportThreadScreen";
 import type { MainStackParamList } from "./types";
 
 // ErrandTracking (live runner tracking) lands in later work. Tabs
@@ -32,6 +35,9 @@ export default function MainNavigator() {
         component={RecurringErrandsScreen}
         options={{ headerShown: true, title: "Repeating errands" }}
       />
+      <Stack.Screen name="Support" component={SupportListScreen} options={{ headerShown: true, title: "Help & support" }} />
+      <Stack.Screen name="SupportNew" component={SupportNewScreen} options={{ headerShown: true, title: "Contact support" }} />
+      <Stack.Screen name="SupportThread" component={SupportThreadScreen} options={{ headerShown: true, title: "Support" }} />
     </Stack.Navigator>
   );
 }

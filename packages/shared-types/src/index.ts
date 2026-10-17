@@ -5,3 +5,4 @@ export * from "./transaction";
 export * from "./verification";
 export * from "./message";
 export * from "./sos";
+export * from "./support";

@@ -17,6 +17,7 @@ export interface SignUpDetails {
   phone: string;
   email?: string;
   password: string;
+  referralCode?: string;
   gender: Gender;
 }
 

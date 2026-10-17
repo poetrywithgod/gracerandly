@@ -14,6 +14,9 @@ export type MainStackParamList = {
   ErrandDetail: { errandId: string };
   Verification: undefined;
   Chat: { errandId: string };
+  Support: undefined;
+  SupportNew: undefined;
+  SupportThread: { ticketId: string };
 };
 
 export type RootStackParamList = {

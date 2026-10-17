@@ -28,8 +28,8 @@ const theme = getTheme("light");
 type Props = NativeStackScreenProps<AuthStackParamList, "Signup">;
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-type ServerField = "fullName" | "phone" | "email" | "password" | "gender";
-const SERVER_FIELDS: ServerField[] = ["fullName", "phone", "email", "password", "gender"];
+type ServerField = "fullName" | "phone" | "email" | "password" | "gender" | "referralCode";
+const SERVER_FIELDS: ServerField[] = ["fullName", "phone", "email", "password", "gender", "referralCode"];
 
 const MIN_LOCAL_PHONE_DIGITS = 6;
 const MIN_PASSWORD_LENGTH = 6;
@@ -54,6 +54,7 @@ export default function SignupScreen({ navigation }: Props) {
   const [gender, setGender] = useState<Gender | null>(null);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [referralCode, setReferralCode] = useState("");
 
   const [submitted, setSubmitted] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -142,6 +143,7 @@ export default function SignupScreen({ navigation }: Props) {
         phone: `+${country.dialCode}${localPhone}`,
         email: email.trim() || undefined,
         password,
+        referralCode: referralCode.trim() || undefined,
         gender,
       });
       // On success, AuthContext flips isAuthenticated and RootNavigator
@@ -160,7 +162,7 @@ export default function SignupScreen({ navigation }: Props) {
       }
       setFormError(err instanceof Error ? err.message : "Sign up failed");
     }
-  }, [isFormValid, signUp, fullName, country, localPhone, email, password, gender]);
+  }, [isFormValid, signUp, fullName, country, localPhone, email, password, gender, referralCode]);
 
   const handleGoToLogin = useCallback(() => {
     navigation.navigate("Login");
@@ -242,6 +244,20 @@ export default function SignupScreen({ navigation }: Props) {
 
             <GenderSelect value={gender} onChange={setGender} />
             {genderError ?? serverErrors.gender ? <Text style={styles.genderError}>{genderError ?? serverErrors.gender}</Text> : null}
+
+            <FloatingLabelInput
+              label="Referral code (optional)"
+              value={referralCode}
+              onChangeText={(value) => {
+                setReferralCode(value.toUpperCase());
+                clearServerError("referralCode");
+              }}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={20}
+              returnKeyType="next"
+              error={serverErrors.referralCode}
+            />
 
             <FloatingLabelInput
               label="Password"

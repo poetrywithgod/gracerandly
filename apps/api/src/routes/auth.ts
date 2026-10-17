@@ -16,6 +16,7 @@ import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
 import { requestVerificationCode, confirmVerificationCode } from "../lib/verification";
+import { findCodeOwner, getReferralSummary, normalizeReferralCode, recordReferral } from "../lib/referrals";
 import { ratingSummaryFor, listReviewsAbout } from "../lib/reviews";
 import type { Requester } from "@gracerandly/shared-types";
 
@@ -71,6 +72,14 @@ router.post(
       throw AppErrors.conflict(message, { [isPhone ? "phone" : "email"]: message });
     }
 
+    // A referral code that doesn't exist stops the signup (before an account
+    // is created) so the person can fix a typo; leaving it blank is fine.
+    const referralCode = normalizeReferralCode(input.referralCode);
+    if (referralCode && !(await findCodeOwner(referralCode))) {
+      const message = "That referral code isn't valid — check it or leave it blank";
+      throw AppErrors.validation(message, { referralCode: message });
+    }
+
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_SALT_ROUNDS);
 
     const [row] = await db
@@ -84,8 +93,20 @@ router.post(
       })
       .returning();
 
+    if (referralCode) await recordReferral(referralCode, "requester", row.id);
+
     const token = signAuthToken({ sub: row.id, role: "requester" });
     res.status(201).json({ token, user: toRequester(row) });
+  })
+);
+
+// The requester's referral code, how their invites are doing, and the
+// credit they've earned (see lib/referrals.ts).
+router.get(
+  "/referrals/me",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await getReferralSummary("requester", req.requesterId!));
   })
 );
 

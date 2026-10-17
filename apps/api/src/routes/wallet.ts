@@ -15,6 +15,13 @@ import {
   koboToAmount,
   splitCommission,
 } from "../lib/payments";
+import {
+  MIN_FEE_AFTER_CREDIT_NAIRA,
+  consumeCredit,
+  releaseCredit,
+  reserveCredit,
+  settleRunnerBonus,
+} from "../lib/referrals";
 import type { EscrowTransaction } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -36,6 +43,11 @@ function toEscrowTransaction(row: typeof escrowTransactions.$inferSelect): Escro
   };
 }
 
+/** What Paystack should have charged for this transaction: the fee plus the items budget, less any referral credit. */
+function expectedCharge(tx: { amount: number; itemsBudget: number; creditApplied: number }): number {
+  return tx.amount + tx.itemsBudget - tx.creditApplied;
+}
+
 /**
  * Applies a successful/failed verification result to a transaction row —
  * shared between the manual /verify endpoint and the webhook, so the two
@@ -54,6 +66,7 @@ async function settleTransaction(
       .update(escrowTransactions)
       .set({ status: "failed" })
       .where(and(eq(escrowTransactions.id, transactionId), eq(escrowTransactions.status, "pending")));
+    await releaseCredit(transactionId);
     return "failed" as const;
   }
 
@@ -64,6 +77,7 @@ async function settleTransaction(
       .update(escrowTransactions)
       .set({ status: "failed" })
       .where(and(eq(escrowTransactions.id, transactionId), eq(escrowTransactions.status, "pending")));
+    await releaseCredit(transactionId);
     return "amount_mismatch" as const;
   }
 
@@ -73,6 +87,9 @@ async function settleTransaction(
     .update(escrowTransactions)
     .set({ status: "escrowed" })
     .where(and(eq(escrowTransactions.id, transactionId), eq(escrowTransactions.status, "pending")));
+
+  // The payment is real now, so any referral credit held for it is spent.
+  await consumeCredit(transactionId);
 
   // If a runner already accepted this errand before it was paid (repeating
   // errands are posted unpaid, and requesters can pay late), attach them to
@@ -137,28 +154,65 @@ router.post(
     }
 
     const { commissionAmount, runnerPayout } = splitCommission(errand.estimatedCost);
-    const totalCharge = errand.estimatedCost + errand.itemsBudget;
     const reference = `gracerandly-${randomUUID()}`;
+    const transactionId = randomUUID();
 
-    const { authorizationUrl } = await initializeTransaction({
-      email: requester.email,
-      amountNaira: totalCharge,
-      reference,
-      callbackUrl: input.callbackUrl,
-    });
+    // An earlier, unfinished attempt to pay for this errand may be holding
+    // referral credit. That attempt is superseded by this one, so close it
+    // and free its credit to be used here. (If its payment link is somehow
+    // still paid later, it ends up as a mismatch for support to sort out.)
+    const staleWithCredit = await db
+      .select({ id: escrowTransactions.id })
+      .from(escrowTransactions)
+      .where(
+        and(
+          eq(escrowTransactions.errandId, errandId),
+          eq(escrowTransactions.status, "pending"),
+          sql`${escrowTransactions.creditApplied} > 0`
+        )
+      );
+    for (const stale of staleWithCredit) {
+      await db
+        .update(escrowTransactions)
+        .set({ status: "failed" })
+        .where(and(eq(escrowTransactions.id, stale.id), eq(escrowTransactions.status, "pending")));
+      await releaseCredit(stale.id);
+    }
+
+    // Referral credit comes off the delivery fee only (never the items
+    // money), and always leaves a small part of the fee to pay so Paystack
+    // never has to charge next to nothing.
+    const creditCap = Math.max(0, errand.estimatedCost - MIN_FEE_AFTER_CREDIT_NAIRA);
+    const creditApplied = await reserveCredit(req.requesterId!, creditCap, transactionId);
+    const totalCharge = errand.estimatedCost + errand.itemsBudget - creditApplied;
+
+    let authorizationUrl: string;
+    try {
+      ({ authorizationUrl } = await initializeTransaction({
+        email: requester.email,
+        amountNaira: totalCharge,
+        reference,
+        callbackUrl: input.callbackUrl,
+      }));
+    } catch (err) {
+      await releaseCredit(transactionId);
+      throw err;
+    }
 
     await db.insert(escrowTransactions).values({
+      id: transactionId,
       errandId,
       requesterId: req.requesterId!,
       amount: errand.estimatedCost,
       commissionAmount,
       runnerPayout,
       itemsBudget: errand.itemsBudget,
+      creditApplied,
       status: "pending",
       providerReference: reference,
     });
 
-    res.status(201).json({ authorizationUrl, reference });
+    res.status(201).json({ authorizationUrl, reference, creditApplied, amountToPay: totalCharge });
   })
 );
 
@@ -191,7 +245,7 @@ router.post(
     }
 
     const outcome = await verifyTransaction(reference);
-    const result = await settleTransaction(transaction.id, outcome, transaction.amount + transaction.itemsBudget);
+    const result = await settleTransaction(transaction.id, outcome, expectedCharge(transaction));
 
     const [updated] = await db
       .select()
@@ -248,6 +302,7 @@ async function settleRunnerPayout(
       .where(
         and(inArray(escrowTransactions.id, payout.transactionIds), eq(escrowTransactions.status, "released"))
       );
+    await settleRunnerBonus(payout.id, true);
   } else {
     await db
       .update(runnerPayouts)
@@ -259,6 +314,8 @@ async function settleRunnerPayout(
       .where(and(eq(runnerPayouts.id, payout.id), eq(runnerPayouts.status, "pending")));
     // Left as "released" — POST /me/payout will pick these back up next
     // time the runner requests a payout, no manual intervention needed.
+    // Same for any referral bonus that was part of this payout.
+    await settleRunnerBonus(payout.id, false);
   }
   return true;
 }
@@ -336,7 +393,7 @@ router.post(
         await settleTransaction(
           transaction.id,
           { success: true, amountNaira: koboToAmount(event.data.amount ?? 0) },
-          transaction.amount + transaction.itemsBudget
+          expectedCharge(transaction)
         );
       }
     } else if (

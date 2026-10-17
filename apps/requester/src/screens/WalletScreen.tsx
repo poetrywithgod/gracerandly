@@ -10,6 +10,7 @@ import Button from "../components/Button";
 import { SkeletonBlock } from "../components/Skeleton";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
+import { REFERRAL_PATH } from "../lib/supportBase";
 
 const theme = getTheme("light");
 
@@ -62,6 +63,8 @@ export default function WalletScreen() {
 
   const [payingErrandId, setPayingErrandId] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
+  // Referral credit waiting to be used (applied automatically when you pay).
+  const [credit, setCredit] = useState(0);
 
   const loadAll = useCallback(
     async (isRefresh = false) => {
@@ -78,6 +81,10 @@ export default function WalletScreen() {
         ]);
         setErrands(errandsRes.errands);
         setTransactions(transactionsRes.transactions);
+        // Nice-to-have: the wallet works without it.
+        apiFetch<{ availableNaira: number }>(REFERRAL_PATH, { headers: { Authorization: `Bearer ${token}` } })
+          .then((r) => setCredit(r.availableNaira))
+          .catch(() => {});
       } catch (err) {
         setLoadError(err instanceof ApiError ? err.message : "Couldn't load your wallet");
       } finally {
@@ -160,6 +167,12 @@ export default function WalletScreen() {
         <Text style={styles.errorText}>{loadError}</Text>
       ) : (
         <>
+          {credit > 0 ? (
+            <Text style={styles.creditNote}>
+              You have {formatNaira(credit)} referral credit. It comes off your delivery fee automatically when you pay.
+            </Text>
+          ) : null}
+
           {unpaidErrands.length > 0 ? (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Awaiting payment</Text>
@@ -218,6 +231,15 @@ export default function WalletScreen() {
 }
 
 const styles = StyleSheet.create({
+  creditNote: {
+    fontFamily: theme.fonts.uiMedium,
+    fontSize: 13,
+    color: theme.colors.primaryDark,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.md,
+  },
   flex: { flex: 1, backgroundColor: theme.colors.background },
   container: { padding: theme.spacing.lg, paddingBottom: theme.spacing.xxl },
   loadingState: { gap: theme.spacing.sm },

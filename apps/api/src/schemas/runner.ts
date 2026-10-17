@@ -41,6 +41,8 @@ export const runnerSignupSchema = z.object({
   phone: phoneSchema,
   email: z.email("Enter a valid email address").optional(),
   password: z.string().min(6, "Password must be at least 6 characters"),
+  // Someone else's referral code, typed at signup (checked in the route).
+  referralCode: z.string().trim().max(20).optional(),
 });
 
 export type RunnerSignupInput = z.infer<typeof runnerSignupSchema>;

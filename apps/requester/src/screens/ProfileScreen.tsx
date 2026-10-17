@@ -4,6 +4,7 @@ import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import {
   Repeat,
+  LifeBuoy,
   Phone,
   Mail,
   ShieldCheck,
@@ -22,6 +23,7 @@ import TextField from "../components/TextField";
 import PillSelect from "../components/PillSelect";
 import { SkeletonBlock } from "../components/Skeleton";
 import ConfirmModal from "../components/ConfirmModal";
+import ReferralCard from "../components/ReferralCard";
 import AvatarPickerModal from "../components/AvatarPickerModal";
 import ReviewsListModal from "../components/ReviewsListModal";
 import VerificationModal from "../components/VerificationModal";
@@ -372,6 +374,21 @@ export default function ProfileScreen() {
             </View>
             <ChevronRight size={16} color={theme.colors.textMuted} />
           </Pressable>
+
+          <Pressable
+            style={styles.ratingCard}
+            onPress={() => navigation.navigate("Support")}
+            accessibilityRole="button"
+            accessibilityLabel="Help and support"
+          >
+            <View style={styles.ratingLeft}>
+              <LifeBuoy size={18} color={theme.colors.primary} />
+              <Text style={styles.ratingLabel}>Help &amp; support</Text>
+            </View>
+            <ChevronRight size={16} color={theme.colors.textMuted} />
+          </Pressable>
+
+          <ReferralCard rewardKind="credit" />
 
           <View style={styles.infoCard}>
             <InfoRow

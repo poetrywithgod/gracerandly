@@ -54,6 +54,15 @@ export default function PushHost() {
     if (lastResponse.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
 
     const data = lastResponse.notification.request.content.data;
+    if (data?.type === "support_reply" && typeof data?.ticketId === "string") {
+      const ticketId = data.ticketId;
+      whenNavigatorReady(() => navigationRef.navigate("SupportThread", { ticketId }));
+      return;
+    }
+    if (data?.type === "referral_reward") {
+      whenNavigatorReady(() => navigationRef.navigate("Tabs"));
+      return;
+    }
     const errandId = data?.errandId;
     if (data?.type === "new_errand" && typeof errandId === "string") {
       requestErrandFeedRefresh();

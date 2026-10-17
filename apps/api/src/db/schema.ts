@@ -32,6 +32,9 @@ export const requesters = pgTable("requesters", {
   email: text("email").unique(),
   gender: genderEnum("gender").notNull(),
   passwordHash: text("password_hash").notNull(),
+  // Code other people type at signup to credit this account with a referral
+  // (see lib/referrals.ts). Created the first time it's needed.
+  referralCode: text("referral_code").unique(),
   phoneVerified: boolean("phone_verified").notNull().default(false),
   emailVerified: boolean("email_verified").notNull().default(false),
   // Data URI for now — swap for a hosted URL once real object storage
@@ -72,6 +75,8 @@ export const runners = pgTable("runners", {
   phone: text("phone").notNull().unique(),
   email: text("email").unique(),
   passwordHash: text("password_hash").notNull(),
+  // See requesters.referralCode.
+  referralCode: text("referral_code").unique(),
   // Same base64 data-URI approach as requesters.avatarUrl — see that
   // column's usage in routes/auth.ts's PATCH /me/avatar for the pattern
   // this mirrors (routes/runners.ts's PATCH /me/avatar does the same).
@@ -294,6 +299,11 @@ export const escrowTransactions = pgTable("escrow_transactions", {
   // a failed one leaves the budget untouched so the runner can retry.
   itemsBudget: integer("items_budget").notNull().default(0),
   itemsSpent: integer("items_spent").notNull().default(0),
+  // Referral credit taken off what the requester was charged (see
+  // lib/referrals.ts). The runner's payout is unaffected — Gracerandly
+  // absorbs the credit. The Paystack charge is
+  // amount + itemsBudget - creditApplied.
+  creditApplied: integer("credit_applied").notNull().default(0),
   status: transactionStatusEnum("status").notNull().default("pending"),
   // Paystack's transaction reference — handed to them at initialize time,
   // matched back against at verify time (manual verify or their webhook).
@@ -396,6 +406,118 @@ export const vendorDisbursements = pgTable("vendor_disbursements", {
 
 export type VendorDisbursementRow = typeof vendorDisbursements.$inferSelect;
 export type NewVendorDisbursementRow = typeof vendorDisbursements.$inferInsert;
+
+// ---------------------------------------------------------------------
+// Referrals (lib/referrals.ts)
+// ---------------------------------------------------------------------
+
+// Whose account something belongs to, for tables that serve both apps.
+export const userRoleEnum = pgEnum("user_role", ["requester", "runner"]);
+
+export const referralStatusEnum = pgEnum("referral_status", ["pending", "qualified"]);
+
+// One row per referred account: who invited them (by code, at signup) and
+// whether they've since earned the reward by completing a qualifying
+// errand. referrerId/referredId point at requesters OR runners depending on
+// the role columns, so they aren't foreign keys.
+export const referrals = pgTable(
+  "referrals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    referrerRole: userRoleEnum("referrer_role").notNull(),
+    referrerId: uuid("referrer_id").notNull(),
+    referredRole: userRoleEnum("referred_role").notNull(),
+    referredId: uuid("referred_id").notNull(),
+    status: referralStatusEnum("status").notNull().default("pending"),
+    qualifiedAt: timestamp("qualified_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // An account can only ever have been referred once.
+    uniqueIndex("referrals_one_per_referred_idx").on(table.referredRole, table.referredId),
+    index("referrals_referrer_idx").on(table.referrerRole, table.referrerId),
+  ]
+);
+
+// available -> reserved (held for a checkout / payout in flight) -> used.
+// A failed checkout or payout puts a reserved reward back to available.
+export const referralRewardStatusEnum = pgEnum("referral_reward_status", ["available", "reserved", "used"]);
+
+// What a qualified referral earned each side. A requester's reward is
+// credit off a later errand; a runner's is cash added to their payout.
+export const referralRewards = pgTable(
+  "referral_rewards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    referralId: uuid("referral_id")
+      .notNull()
+      .references(() => referrals.id, { onDelete: "cascade" }),
+    beneficiaryRole: userRoleEnum("beneficiary_role").notNull(),
+    beneficiaryId: uuid("beneficiary_id").notNull(),
+    amount: integer("amount").notNull(),
+    status: referralRewardStatusEnum("status").notNull().default("available"),
+    // Set while status is "reserved": the escrow transaction (requester
+    // credit) or runner payout (runner bonus) it's held for.
+    reservedForTransactionId: uuid("reserved_for_transaction_id"),
+    reservedForPayoutId: uuid("reserved_for_payout_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+  },
+  (table) => [index("referral_rewards_beneficiary_idx").on(table.beneficiaryRole, table.beneficiaryId)]
+);
+
+// ---------------------------------------------------------------------
+// Support tickets (lib/support.ts)
+// ---------------------------------------------------------------------
+
+export const supportCategoryEnum = pgEnum("support_category", [
+  "payment",
+  "errand_problem",
+  "other_person",
+  "account",
+  "safety",
+  "other",
+]);
+
+export const supportStatusEnum = pgEnum("support_status", ["open", "awaiting_user", "resolved", "closed"]);
+
+export const supportSenderEnum = pgEnum("support_sender", ["requester", "runner", "staff"]);
+
+export const supportTickets = pgTable(
+  "support_tickets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Who opened it — a requester or a runner (not a foreign key, same
+    // reasoning as referrals).
+    userRole: userRoleEnum("user_role").notNull(),
+    userId: uuid("user_id").notNull(),
+    errandId: uuid("errand_id").references(() => errands.id, { onDelete: "set null" }),
+    category: supportCategoryEnum("category").notNull(),
+    subject: text("subject").notNull(),
+    status: supportStatusEnum("status").notNull().default("open"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("support_tickets_user_idx").on(table.userRole, table.userId),
+    index("support_tickets_status_idx").on(table.status),
+  ]
+);
+
+export const supportMessages = pgTable(
+  "support_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => supportTickets.id, { onDelete: "cascade" }),
+    sender: supportSenderEnum("sender").notNull(),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("support_messages_ticket_idx").on(table.ticketId)]
+);
 
 // Mirrors packages/shared-types' IncidentType union.
 export const trustIncidentTypeEnum = pgEnum("trust_incident_type", [

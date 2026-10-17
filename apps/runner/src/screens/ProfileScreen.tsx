@@ -13,6 +13,7 @@ import {
   Wallet,
   Landmark,
   Star,
+  LifeBuoy,
 } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
 import type { Errand, TrustTierSummary, VehicleType } from "@gracerandly/shared-types";
@@ -22,6 +23,7 @@ import Button from "../components/Button";
 import TextField from "../components/TextField";
 import PillSelect from "../components/PillSelect";
 import ConfirmModal from "../components/ConfirmModal";
+import ReferralCard from "../components/ReferralCard";
 import AvatarPickerModal from "../components/AvatarPickerModal";
 import ReviewsListModal from "../components/ReviewsListModal";
 import { SkeletonBlock } from "../components/Skeleton";
@@ -395,6 +397,19 @@ export default function ProfileScreen() {
             </View>
             <ChevronRight size={18} color={theme.colors.textMuted} />
           </Pressable>
+
+          <Pressable style={styles.card} onPress={() => navigation.navigate("Support")}>
+            <View style={styles.rowLeft}>
+              <LifeBuoy size={20} color={theme.colors.primary} />
+              <View style={styles.rowLeftText}>
+                <Text style={styles.rowLabel}>Help &amp; support</Text>
+                <Text style={styles.rowHint}>Payments, errands, safety or your account</Text>
+              </View>
+            </View>
+            <ChevronRight size={18} color={theme.colors.textMuted} />
+          </Pressable>
+
+          <ReferralCard rewardKind="bonus" />
 
           {user.identityVerified && user.guarantor ? (
             <View style={styles.infoCard}>

@@ -18,6 +18,9 @@ export type MainStackParamList = {
   ErrandTracking: { errandId: string };
   Chat: { errandId: string };
   RecurringErrands: undefined;
+  Support: undefined;
+  SupportNew: undefined;
+  SupportThread: { ticketId: string };
 };
 
 export type RootStackParamList = {

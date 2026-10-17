@@ -13,6 +13,8 @@ import runnersRouter from "./routes/runners";
 import pushRouter from "./routes/push";
 import recurringRouter from "./routes/recurring";
 import internalRouter from "./routes/internal";
+import adminRouter from "./routes/admin";
+import { requesterSupportRouter, runnerSupportRouter } from "./routes/support";
 import { errorHandler } from "./middleware/errorHandler";
 import { attachChatServer } from "./lib/chat-server";
 import { expireStaleAlerts } from "./lib/sos";
@@ -60,7 +62,10 @@ app.get("/health", (_req, res) => {
 app.use("/auth", authRouter);
 app.use("/errands", errandsRouter);
 app.use("/wallet", walletRouter);
+app.use("/runners/support", runnerSupportRouter); // before /runners so it isn't swallowed
 app.use("/runners", runnersRouter);
+app.use("/support", requesterSupportRouter);
+app.use("/admin", adminRouter);
 app.use("/push", pushRouter);
 app.use("/recurring", recurringRouter);
 app.use("/internal", internalRouter);
