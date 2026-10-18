@@ -6,6 +6,7 @@ import { db } from "../db/client";
 import { errands, recurringErrands, vendorDisbursements, runners } from "../db/schema";
 import { createErrandSchema, updateErrandSchema, parseErrandTextSchema, suggestPriceSchema, suggestItemsSchema } from "../schemas/errand";
 import { suggestItems, suggestPrice } from "../lib/suggestions";
+import { notifyRunnerOfCancellation } from "../lib/errand-notify";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
@@ -289,6 +290,9 @@ router.patch(
       .set({ status: "cancelled" })
       .where(eq(errands.id, existing.id))
       .returning();
+
+    // A runner who had already accepted needs to know to stop.
+    void notifyRunnerOfCancellation(existing);
 
     res.json({ errand: toErrand(row) });
   })

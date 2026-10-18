@@ -45,6 +45,11 @@ export default function PushHost() {
       whenNavigatorReady(() => navigationRef.navigate("SupportThread", { ticketId }));
       return;
     }
+    if (data?.type === "errand_status" && typeof data?.errandId === "string") {
+      const statusErrandId = data.errandId;
+      whenNavigatorReady(() => navigationRef.navigate("ErrandDetail", { errandId: statusErrandId }));
+      return;
+    }
     if (data?.type === "referral_reward") {
       whenNavigatorReady(() => navigationRef.navigate("Tabs", { screen: "Profile" }));
       return;

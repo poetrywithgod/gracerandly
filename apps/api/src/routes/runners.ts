@@ -48,6 +48,7 @@ import {
   releaseRunnerBonus,
   reserveRunnerBonus,
 } from "../lib/referrals";
+import { notifyRequesterOfProgress } from "../lib/errand-notify";
 import type { Errand, ErrandStatus, Runner, RunnerPayout, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -824,6 +825,8 @@ router.post(
       .set({ runnerId: req.runnerId! })
       .where(and(eq(escrowTransactions.errandId, row.id), eq(escrowTransactions.status, "escrowed")));
 
+    void notifyRequesterOfProgress(row, "accepted");
+
     res.json({ errand: toErrand(row) });
   })
 );
@@ -973,6 +976,8 @@ router.patch(
         console.error("[trust] couldn't refresh tier", err instanceof Error ? err.message : err)
       );
     }
+
+    void notifyRequesterOfProgress(row, input.status);
 
     res.json({ errand: toErrand(row) });
   })

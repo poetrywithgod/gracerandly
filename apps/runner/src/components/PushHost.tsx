@@ -59,6 +59,12 @@ export default function PushHost() {
       whenNavigatorReady(() => navigationRef.navigate("SupportThread", { ticketId }));
       return;
     }
+    if (data?.type === "errand_cancelled") {
+      // The errand is gone — land on Home, which lists what's still open.
+      requestErrandFeedRefresh();
+      whenNavigatorReady(() => navigationRef.navigate("Tabs"));
+      return;
+    }
     if (data?.type === "referral_reward") {
       whenNavigatorReady(() => navigationRef.navigate("Tabs"));
       return;
