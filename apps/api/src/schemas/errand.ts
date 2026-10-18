@@ -103,3 +103,19 @@ export const parseErrandTextSchema = z.object({
 });
 
 export type ParseErrandTextInput = z.infer<typeof parseErrandTextSchema>;
+
+const pointOnly = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) });
+
+export const suggestPriceSchema = z.object({
+  category: z.enum(["grocery", "pharmacy", "food", "parcel", "miscellaneous"]),
+  urgency: z.enum(["asap", "scheduled"]).default("asap"),
+  pickup: pointOnly,
+  dropoff: pointOnly,
+  stops: z.array(pointOnly).max(MAX_EXTRA_STOPS).default([]),
+  itemCount: z.number().int().nonnegative().max(100).default(1),
+});
+
+export const suggestItemsSchema = z.object({
+  category: z.enum(["grocery", "pharmacy", "food", "parcel", "miscellaneous"]),
+  currentNames: z.array(z.string().trim().max(60)).max(30).default([]),
+});

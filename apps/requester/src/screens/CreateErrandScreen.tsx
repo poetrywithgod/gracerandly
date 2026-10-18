@@ -58,6 +58,15 @@ const SERVER_ERROR_TARGETS = new Set([
 // Mirrors the API's MAX_EXTRA_STOPS (apps/api/src/schemas/errand.ts).
 const MAX_EXTRA_STOPS = 4;
 
+interface PriceSuggestion {
+  suggested: number;
+  low: number;
+  high: number;
+  distanceKm: number;
+  basis: "formula" | "history";
+  samples: number;
+}
+
 interface DraftStop {
   key: string;
   point: GeoPoint | null;
@@ -137,6 +146,11 @@ export default function CreateErrandScreen() {
   const [instructions, setInstructions] = useState("");
   const [estimatedCost, setEstimatedCost] = useState("");
   const [aiParsed, setAiParsed] = useState(false);
+  const [priceHint, setPriceHint] = useState<PriceSuggestion | null>(null);
+  const [isPricing, setIsPricing] = useState(false);
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const [ideas, setIdeas] = useState<{ buyAgain: string[]; related: string[] } | null>(null);
+  const [isFetchingIdeas, setIsFetchingIdeas] = useState(false);
   const [showAiParse, setShowAiParse] = useState(false);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>("once");
   const [recurrenceRule, setRecurrenceRule] = useState<string | null>(null);
@@ -212,6 +226,60 @@ export default function CreateErrandScreen() {
 
   function removeItem(key: string) {
     setItems((prev) => (prev.length > 1 ? prev.filter((item) => item.key !== key) : prev));
+  }
+
+  // Fee suggestion from the route (no AI — see lib/suggestions.ts in the API).
+  async function fetchPriceHint() {
+    if (!category || !pickup || !dropoff) return;
+    setIsPricing(true);
+    setPriceError(null);
+    try {
+      const response = await apiFetch<{ suggestion: PriceSuggestion }>("/errands/suggest-price", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          category,
+          urgency: urgency ?? "asap",
+          pickup: { lat: pickup.lat, lng: pickup.lng },
+          dropoff: { lat: dropoff.lat, lng: dropoff.lng },
+          stops: stops.filter((st) => st.point).map((st) => ({ lat: st.point!.lat, lng: st.point!.lng })),
+          itemCount: items.filter((i) => i.name.trim()).length || 1,
+        }),
+      });
+      setPriceHint(response.suggestion);
+    } catch (err) {
+      setPriceError(err instanceof ApiError ? err.message : "Couldn't get a suggestion");
+    } finally {
+      setIsPricing(false);
+    }
+  }
+
+  async function fetchIdeas() {
+    if (!category) return;
+    setIsFetchingIdeas(true);
+    try {
+      const response = await apiFetch<{ buyAgain: string[]; related: string[] }>("/errands/suggest-items", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ category, currentNames: items.map((i) => i.name.trim()).filter(Boolean) }),
+      });
+      setIdeas(response);
+    } catch {
+      setIdeas({ buyAgain: [], related: [] });
+    } finally {
+      setIsFetchingIdeas(false);
+    }
+  }
+
+  function addIdea(name: string) {
+    setItems((prev) => {
+      const blank = prev.find((i) => !i.name.trim());
+      if (blank) return prev.map((i) => (i.key === blank.key ? { ...i, name } : i));
+      return [...prev, { ...newDraftItem(), name }];
+    });
+    setIdeas((prev) =>
+      prev ? { buyAgain: prev.buyAgain.filter((n) => n !== name), related: prev.related.filter((n) => n !== name) } : prev
+    );
   }
 
   function updateStop(key: string, patch: Partial<DraftStop>) {
@@ -607,6 +675,42 @@ export default function CreateErrandScreen() {
             <Plus size={18} color={theme.colors.primary} />
             <Text style={styles.addItemText}>Add another item</Text>
           </Pressable>
+
+          {category ? (
+            <View style={styles.ideasBox}>
+              <Pressable onPress={fetchIdeas} disabled={isFetchingIdeas} style={styles.addItemButton}>
+                <Sparkles size={18} color={theme.colors.primary} />
+                <Text style={styles.addItemText}>{isFetchingIdeas ? "Thinking…" : "Suggest items"}</Text>
+              </Pressable>
+              {ideas && ideas.buyAgain.length > 0 ? (
+                <>
+                  <Text style={styles.ideasLabel}>Buy again</Text>
+                  <View style={styles.chipRow}>
+                    {ideas.buyAgain.map((name) => (
+                      <Pressable key={name} onPress={() => addIdea(name)} style={styles.chip}>
+                        <Text style={styles.chipText}>+ {name}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              ) : null}
+              {ideas && ideas.related.length > 0 ? (
+                <>
+                  <Text style={styles.ideasLabel}>You might also need</Text>
+                  <View style={styles.chipRow}>
+                    {ideas.related.map((name) => (
+                      <Pressable key={name} onPress={() => addIdea(name)} style={styles.chip}>
+                        <Text style={styles.chipText}>+ {name}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              ) : null}
+              {ideas && ideas.buyAgain.length === 0 && ideas.related.length === 0 ? (
+                <Text style={styles.ideasLabel}>No suggestions right now.</Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
         <TextField
@@ -626,6 +730,33 @@ export default function CreateErrandScreen() {
           keyboardType="number-pad"
           error={errors.estimatedCost}
         />
+
+        {category && pickup && dropoff ? (
+          <View style={styles.ideasBox}>
+            <Pressable onPress={fetchPriceHint} disabled={isPricing} style={styles.addItemButton}>
+              <Sparkles size={18} color={theme.colors.primary} />
+              <Text style={styles.addItemText}>{isPricing ? "Working it out…" : "Suggest a fee"}</Text>
+            </Pressable>
+            {priceHint ? (
+              <View style={styles.priceHint}>
+                <Text style={styles.priceHintText}>
+                  Around ₦{priceHint.suggested.toLocaleString("en-NG")} for about {priceHint.distanceKm} km (usually ₦
+                  {priceHint.low.toLocaleString("en-NG")}–₦{priceHint.high.toLocaleString("en-NG")})
+                  {priceHint.basis === "history" ? ", based on similar errands" : ""}.
+                </Text>
+                <Button
+                  label={`Use ₦${priceHint.suggested.toLocaleString("en-NG")}`}
+                  variant="ghost"
+                  onPress={() => {
+                    setEstimatedCost(String(priceHint.suggested));
+                    setErrors((prev) => ({ ...prev, estimatedCost: "" }));
+                  }}
+                />
+              </View>
+            ) : null}
+            {priceError ? <Text style={styles.errorText}>{priceError}</Text> : null}
+          </View>
+        ) : null}
 
         {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
 
@@ -795,6 +926,20 @@ const styles = StyleSheet.create({
   itemNameField: { flex: 3 },
   itemQtyField: { flex: 1 },
   removeItemButton: { padding: 12, marginTop: 22 },
+  ideasBox: { gap: 6 },
+  ideasLabel: { fontFamily: theme.fonts.ui, fontSize: 12, color: theme.colors.textMuted },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  chip: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  chipText: { fontFamily: theme.fonts.uiMedium, fontSize: 13, color: theme.colors.primaryDark },
+  priceHint: { backgroundColor: theme.colors.surface, borderRadius: theme.radius.md, padding: theme.spacing.md, gap: 4 },
+  priceHintText: { fontFamily: theme.fonts.ui, fontSize: 13, color: theme.colors.text },
   addItemButton: {
     flexDirection: "row",
     alignItems: "center",

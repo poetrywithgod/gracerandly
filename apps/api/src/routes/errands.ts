@@ -4,7 +4,8 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
 import { errands, recurringErrands, vendorDisbursements, runners } from "../db/schema";
-import { createErrandSchema, updateErrandSchema, parseErrandTextSchema } from "../schemas/errand";
+import { createErrandSchema, updateErrandSchema, parseErrandTextSchema, suggestPriceSchema, suggestItemsSchema } from "../schemas/errand";
+import { suggestItems, suggestPrice } from "../lib/suggestions";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
@@ -182,6 +183,26 @@ router.post(
     const { text } = parseErrandTextSchema.parse(req.body);
     const draft = await parseErrandFromText(text);
     res.json({ draft });
+  })
+);
+
+// A suggested delivery fee for the route being drafted. Plain arithmetic
+// (plus real prices of similar errands once there are enough) — no AI.
+router.post(
+  "/suggest-price",
+  asyncHandler(async (req, res) => {
+    const input = suggestPriceSchema.parse(req.body);
+    res.json({ suggestion: await suggestPrice(input) });
+  })
+);
+
+// "Buy again" chips from the requester's own history, plus AI "you might
+// also need" ideas. Never fails because the AI helper is down.
+router.post(
+  "/suggest-items",
+  asyncHandler(async (req, res) => {
+    const input = suggestItemsSchema.parse(req.body);
+    res.json(await suggestItems({ requesterId: req.requesterId!, ...input }));
   })
 );
 
