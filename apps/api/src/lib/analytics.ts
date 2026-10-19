@@ -48,6 +48,10 @@ export interface AnalyticsSummary {
     runnerPayoutsSent: number;
     runnerPayoutsPending: number;
     avgFee: number | null;
+    /** Money sent back to requesters in the period (cancellations, unspent items, staff refunds). */
+    refunded: number;
+    /** Refunds Paystack rejected — need a retry from the Refunds tab. */
+    refundsNeedingAttention: number;
   };
   referrals: { invited: number; qualified: number; rewardsIssued: number; rewardsUsedNaira: number; rewardsOutstandingNaira: number };
   support: { open: number; awaitingUser: number; newInPeriod: number; resolvedInPeriod: number };
@@ -59,7 +63,7 @@ export async function getAnalytics(daysInput: number): Promise<AnalyticsSummary>
   const days = Math.min(Math.max(Math.floor(daysInput) || 30, 1), 365);
   const since = sql`(date_trunc('day', now() AT TIME ZONE ${TZ}::text) - make_interval(days => ${days - 1}::int)) AT TIME ZONE ${TZ}::text`;
 
-  const [reqU, runU, errs, cats, money, payouts, refs, rewards, supp, daily, top] = await Promise.all([
+  const [reqU, runU, errs, cats, money, refundStats, payouts, refs, rewards, supp, daily, top] = await Promise.all([
     one<any>(sql`select count(*) total, count(*) filter (where created_at >= ${since}) fresh from requesters`),
     one<any>(sql`select count(*) total, count(*) filter (where created_at >= ${since}) fresh, count(*) filter (where identity_verified) verified from runners`),
     one<any>(sql`select
@@ -80,6 +84,10 @@ export async function getAnalytics(daysInput: number): Promise<AnalyticsSummary>
         coalesce(sum(credit_applied), 0) credit,
         avg(amount) avg_fee
       from escrow_transactions where status in ${PAID} and created_at >= ${since}`),
+    one<any>(sql`select
+        coalesce(sum(amount) filter (where status <> 'failed' and created_at >= ${since}), 0) refunded,
+        count(*) filter (where status = 'failed') failed
+      from refunds`),
     one<any>(sql`select
         coalesce(sum(amount) filter (where status = 'success' and created_at >= ${since}), 0) sent,
         coalesce(sum(amount) filter (where status = 'pending'), 0) pending
@@ -145,6 +153,8 @@ export async function getAnalytics(daysInput: number): Promise<AnalyticsSummary>
       runnerPayoutsSent: num(payouts.sent),
       runnerPayoutsPending: num(payouts.pending),
       avgFee: money.avg_fee === null ? null : Math.round(num(money.avg_fee)),
+      refunded: num(refundStats.refunded),
+      refundsNeedingAttention: num(refundStats.failed),
     },
     referrals: {
       invited: num(refs.invited),

@@ -15,6 +15,7 @@ import {
   koboToAmount,
   splitCommission,
 } from "../lib/payments";
+import { refundLatePayment, settleRefundWebhook } from "../lib/refunds";
 import {
   MIN_FEE_AFTER_CREDIT_NAIRA,
   consumeCredit,
@@ -395,7 +396,13 @@ router.post(
           { success: true, amountNaira: koboToAmount(event.data.amount ?? 0) },
           expectedCharge(transaction)
         );
+      } else if (transaction && transaction.status === "failed") {
+        // Money arrived for a payment we'd already closed (the errand was
+        // cancelled, or a newer payment link replaced this one). Send it back.
+        await refundLatePayment(transaction, koboToAmount(event.data.amount ?? 0));
       }
+    } else if (event.event?.startsWith("refund.")) {
+      await settleRefundWebhook({ ...(event.data as object), status: event.event.slice("refund.".length) } as Parameters<typeof settleRefundWebhook>[0]);
     } else if (
       (event.event === "transfer.success" || event.event === "transfer.failed" || event.event === "transfer.reversed") &&
       event.data?.reference

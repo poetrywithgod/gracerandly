@@ -49,6 +49,8 @@ import {
   reserveRunnerBonus,
 } from "../lib/referrals";
 import { notifyRequesterOfProgress } from "../lib/errand-notify";
+import { dropErrandByRunner } from "../lib/cancellation";
+import { refundUnspentItems } from "../lib/refunds";
 import type { Errand, ErrandStatus, Runner, RunnerPayout, VendorDisbursement } from "@gracerandly/shared-types";
 
 const router: Router = Router();
@@ -964,6 +966,8 @@ router.patch(
         .from(escrowTransactions)
         .where(and(eq(escrowTransactions.errandId, row.id), eq(escrowTransactions.status, "released")))
         .limit(1);
+      // Whatever part of the items budget wasn't spent goes back to the requester.
+      if (released) void refundUnspentItems(released.id);
       void qualifyReferralsForDelivery({
         requesterId: row.requesterId,
         runnerId: row.runnerId,
@@ -980,6 +984,18 @@ router.patch(
     void notifyRequesterOfProgress(row, input.status);
 
     res.json({ errand: toErrand(row) });
+  })
+);
+
+// A runner pulling out before pickup: the errand goes back to the pool and
+// the requester is told (lib/cancellation.ts).
+router.post(
+  "/errands/:id/drop",
+  requireRunnerAuth,
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnActiveErrand(parseErrandId(req.params.id), req.runnerId!);
+    const errand = await dropErrandByRunner(existing, req.runnerId!);
+    res.json({ errand: toErrand(errand) });
   })
 );
 

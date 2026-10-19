@@ -720,3 +720,47 @@ export const errandReviews = pgTable(
 );
 
 export type ErrandReviewRow = typeof errandReviews.$inferSelect;
+
+// ---------------------------------------------------------------------
+// Refunds (lib/refunds.ts)
+// ---------------------------------------------------------------------
+
+// "cancelled": money back when an errand is cancelled; "items_leftover": the
+// part of the items budget the runner didn't spend; "admin": staff-issued.
+export const refundReasonEnum = pgEnum("refund_reason", ["cancelled", "items_leftover", "admin"]);
+export const refundStatusEnum = pgEnum("refund_status", ["pending", "processed", "failed"]);
+
+export const refunds = pgTable(
+  "refunds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    escrowTransactionId: uuid("escrow_transaction_id")
+      .notNull()
+      .references(() => escrowTransactions.id),
+    errandId: uuid("errand_id")
+      .notNull()
+      .references(() => errands.id),
+    requesterId: uuid("requester_id")
+      .notNull()
+      .references(() => requesters.id),
+    amount: integer("amount").notNull(),
+    reason: refundReasonEnum("reason").notNull(),
+    note: text("note"),
+    status: refundStatusEnum("status").notNull().default("pending"),
+    // Paystack's refund id (or reference), to match their refund.* webhooks.
+    providerReference: text("provider_reference"),
+    failureReason: text("failure_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("refunds_errand_idx").on(table.errandId),
+    // Cancel and leftover refunds can only ever happen once per payment, so
+    // a retried request or a webhook replay can't pay the requester twice.
+    uniqueIndex("refunds_once_per_reason_idx")
+      .on(table.escrowTransactionId, table.reason)
+      .where(sql`${table.reason} <> 'admin'`),
+  ]
+);
+
+export type RefundRow = typeof refunds.$inferSelect;

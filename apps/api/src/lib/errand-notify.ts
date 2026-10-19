@@ -65,12 +65,15 @@ export async function notifyRequesterOfProgress(errand: ErrandRef, status: Erran
 }
 
 /** Tells the runner an errand they had accepted was cancelled, so they stop heading to it. */
-export async function notifyRunnerOfCancellation(errand: ErrandRef): Promise<void> {
+export async function notifyRunnerOfCancellation(errand: ErrandRef, feeNaira = 0): Promise<void> {
   if (!errand.runnerId) return;
   try {
     await sendPushToUser("runner", errand.runnerId, {
       title: "Errand cancelled",
-      body: "The requester cancelled this errand. You're free to take another one.",
+      body:
+        feeNaira > 0
+          ? `The requester cancelled this errand. You'll get a \u20a6${feeNaira.toLocaleString("en-NG")} cancellation fee in your earnings.`
+          : "The requester cancelled this errand. You're free to take another one.",
       data: { type: "errand_cancelled", errandId: errand.id },
       channelId: "errands",
       ttl: 6 * 3600,

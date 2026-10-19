@@ -11,6 +11,7 @@ import LiveTrackingMap from "../components/LiveTrackingMap";
 import ReviewCard from "../components/ReviewCard";
 import { MessageCircle } from "lucide-react-native";
 import Button from "../components/Button";
+import ConfirmModal from "../components/ConfirmModal";
 import SosButton from "../components/SosButton";
 import TextField from "../components/TextField";
 import type { MainStackParamList } from "../navigation/types";
@@ -58,6 +59,8 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  const [showDropConfirm, setShowDropConfirm] = useState(false);
+  const [isDropping, setIsDropping] = useState(false);
   const [confirmingStopId, setConfirmingStopId] = useState<string | null>(null);
   // Cash float: purchases the runner paid for from their own pocket on this errand.
   const [floatPayments, setFloatPayments] = useState<VendorDisbursement[]>([]);
@@ -186,6 +189,25 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
       setIsSubmitting(false);
     }
   }, [errand, token, errandId, pin]);
+
+  const handleDrop = useCallback(async () => {
+    if (!token) return;
+    setIsDropping(true);
+    try {
+      await apiFetch(`/runners/errands/${errandId}/drop`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setShowDropConfirm(false);
+      requestLiveLocationRefresh();
+      navigation.goBack();
+    } catch (err) {
+      setShowDropConfirm(false);
+      setError(err instanceof ApiError ? err.message : "Couldn't drop this errand");
+    } finally {
+      setIsDropping(false);
+    }
+  }, [token, errandId, navigation]);
 
   // Extra stops are visited in order while the errand is in progress; each is
   // confirmed on arrival (the API checks the runner is actually there).
@@ -376,6 +398,22 @@ export default function ErrandDetailScreen({ route, navigation }: Props) {
       ) : (
         <Text style={styles.emptyText}>This errand is complete.</Text>
       )}
+
+      {errand.status === "accepted" || errand.status === "en_route_to_pickup" ? (
+        <Button label="Can't do this errand" variant="secondary" onPress={() => setShowDropConfirm(true)} />
+      ) : null}
+
+      <ConfirmModal
+        visible={showDropConfirm}
+        title="Drop this errand?"
+        body="It goes back to the feed for other runners and the requester is told. Please only do this if you really can't make it."
+        confirmLabel="Drop errand"
+        cancelLabel="Keep it"
+        destructive
+        isConfirming={isDropping}
+        onConfirm={handleDrop}
+        onCancel={() => setShowDropConfirm(false)}
+      />
     </ScrollView>
   );
 }

@@ -263,6 +263,14 @@ export async function consumeCredit(transactionId: string): Promise<void> {
     .where(and(eq(referralRewards.reservedForTransactionId, transactionId), eq(referralRewards.status, "reserved")));
 }
 
+/** A paid errand was cancelled and refunded: give the credit it had used back. */
+export async function restoreCredit(transactionId: string): Promise<void> {
+  await db
+    .update(referralRewards)
+    .set({ status: "available", reservedForTransactionId: null, usedAt: null })
+    .where(and(eq(referralRewards.reservedForTransactionId, transactionId), eq(referralRewards.status, "used")));
+}
+
 // ---------------------------------------------------------------------
 // Runner cash bonus in payouts
 // ---------------------------------------------------------------------

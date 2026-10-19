@@ -102,6 +102,7 @@ export default function ErrandDetailScreen() {
   const [showCancelledModal, setShowCancelledModal] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelSummary, setCancelSummary] = useState("This errand has been cancelled.");
 
   const load = useCallback(async () => {
     try {
@@ -140,11 +141,17 @@ export default function ErrandDetailScreen() {
     setIsCancelling(true);
     setCancelError(null);
     try {
-      const response = await apiFetch<{ errand: Errand }>(`/errands/${errandId}/cancel`, {
+      const response = await apiFetch<{ errand: Errand; refundedNaira?: number; cancellationFeeNaira?: number }>(`/errands/${errandId}/cancel`, {
         method: "PATCH",
         headers: { Authorization: `Bearer ${token}` },
       });
       setErrand(response.errand);
+      const refunded = response.refundedNaira ?? 0;
+      const fee = response.cancellationFeeNaira ?? 0;
+      const parts = ["This errand has been cancelled."];
+      if (refunded > 0) parts.push(`₦${refunded.toLocaleString()} is being refunded to your card. It can take a few days to show up.`);
+      if (fee > 0) parts.push(`₦${fee.toLocaleString()} went to your runner for the trip already made.`);
+      setCancelSummary(parts.join(" "));
       setShowCancelConfirm(false);
       setShowCancelledModal(true);
     } catch (err) {
@@ -281,7 +288,7 @@ export default function ErrandDetailScreen() {
       <ErrandPostedModal
         visible={showCancelledModal}
         title="Errand cancelled"
-        body="This errand has been cancelled."
+        body={cancelSummary}
         onDone={() => {
           setShowCancelledModal(false);
           navigation.goBack();
@@ -291,7 +298,12 @@ export default function ErrandDetailScreen() {
       <ConfirmModal
         visible={showCancelConfirm}
         title="Cancel this errand?"
-        body={cancelError ?? "This can't be undone."}
+        body={
+          cancelError ??
+          (errand.status === "pending_match"
+            ? "You'll get a full refund of anything you've paid."
+            : "A runner has already taken this errand, so a small cancellation fee goes to them. The rest is refunded.")
+        }
         confirmLabel="Cancel errand"
         cancelLabel="Keep errand"
         destructive

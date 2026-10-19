@@ -301,6 +301,39 @@ export async function initiateTransfer(params: InitiateTransferParams): Promise<
   return { transferCode: data.data.transfer_code, status: data.data.status };
 }
 
+export interface RefundResult {
+  /** Paystack's own id for the refund, to match its refund.* webhooks. */
+  providerReference: string;
+  status: "pending" | "processed" | "failed";
+}
+
+/**
+ * Asks Paystack to send money from a payment back to the customer's card or
+ * bank. Partial refunds are fine (amountNaira can be less than the original
+ * charge). Paystack usually answers "pending" and settles it in a few days,
+ * telling us through a refund.processed / refund.failed webhook.
+ */
+export async function refundTransaction(params: { reference: string; amountNaira: number }): Promise<RefundResult> {
+  const res = await fetch(`${PAYSTACK_BASE_URL}/refund`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${getSecretKey()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ transaction: params.reference, amount: amountToKobo(params.amountNaira) }),
+  });
+  const data = (await res.json()) as {
+    status: boolean;
+    message: string;
+    data?: { id?: number | string; status?: string; refund_reference?: string | null };
+  };
+  if (!res.ok || !data.status || !data.data) {
+    throw new Error(`Paystack refund failed: ${data.message ?? res.statusText}`);
+  }
+  const raw = (data.data.status ?? "pending").toLowerCase();
+  return {
+    providerReference: String(data.data.id ?? data.data.refund_reference ?? ""),
+    status: raw === "processed" ? "processed" : raw === "failed" ? "failed" : "pending",
+  };
+}
+
 // Gracerandly's cut of each errand fee (the delivery fee only — not the items
 // budget the runner spends at the vendor). Starts at 5%; change it without a
 // code change by setting PLATFORM_COMMISSION_PERCENT on the API (e.g. 6 for 6%,

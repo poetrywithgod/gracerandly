@@ -3,7 +3,11 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import { z } from "zod";
 import { asyncHandler } from "../lib/asyncHandler";
 import { AppError, AppErrors } from "../lib/errors";
+import { desc, eq } from "drizzle-orm";
+import { db } from "../db/client";
+import { errands, refunds } from "../db/schema";
 import { dailyCsv, getAnalytics } from "../lib/analytics";
+import { findPaidTransaction, issueRefund, retryRefund } from "../lib/refunds";
 import { SUPPORT_STATUSES, adminGet, adminList, adminReply, adminSetStatus, replySchema } from "../lib/support";
 
 // Staff side of support. Guarded by one shared key (ADMIN_API_KEY); the whole
@@ -93,6 +97,55 @@ router.get(
   })
 );
 
+const adminRefundSchema = z.object({
+  errandId: z.uuid("Paste the errand's id"),
+  amount: z.number().int().positive("Amount must be a whole number of Naira above 0"),
+  note: z.string().trim().min(3, "Add a short reason").max(300),
+});
+
+router.get(
+  "/api/refunds",
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
+    const rows = await db.select().from(refunds).orderBy(desc(refunds.createdAt)).limit(100);
+    res.json({
+      refunds: rows.map((r) => ({
+        id: r.id,
+        errandId: r.errandId,
+        requesterId: r.requesterId,
+        amount: r.amount,
+        reason: r.reason,
+        note: r.note ?? undefined,
+        status: r.status,
+        failureReason: r.failureReason ?? undefined,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    });
+  })
+);
+
+router.post(
+  "/api/refunds",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const input = adminRefundSchema.parse(req.body);
+    const [errand] = await db.select({ id: errands.id }).from(errands).where(eq(errands.id, input.errandId)).limit(1);
+    if (!errand) throw AppErrors.notFound("No errand with that id");
+    const tx = await findPaidTransaction(input.errandId);
+    if (!tx) throw AppErrors.conflict("That errand has no paid payment to refund");
+    const refund = await issueRefund({ tx, amount: input.amount, reason: "admin", note: input.note });
+    res.status(201).json({ refund });
+  })
+);
+
+router.post(
+  "/api/refunds/:id/retry",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json({ refund: await retryRefund(z.uuid().parse(req.params.id)) });
+  })
+);
+
 const ADMIN_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Gracerandly admin</title>
 <style>
@@ -115,7 +168,7 @@ table{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;ove
 #err{color:#b91c1c}
 </style></head><body>
 <header><h1>Gracerandly admin</h1>
-<button class="tab" id="t-ov">Overview</button><button class="tab" id="t-su">Support</button>
+<button class="tab" id="t-ov">Overview</button><button class="tab" id="t-su">Support</button><button class="tab" id="t-rf">Refunds</button>
 <select id="filter" hidden><option value="">Needs attention</option><option>open</option><option>awaiting_user</option><option>resolved</option><option>closed</option></select>
 <select id="days" hidden><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select>
 <button class="alt" id="out">Sign out</button></header>
@@ -133,9 +186,9 @@ function login(msg){$("#err").textContent=msg||"";$("#view").innerHTML='<div cla
   $("#go").onclick=()=>{key=$("#k").value.trim();sessionStorage.setItem("gr_admin_key",key);show()}}
 function show(){
   if(!key)return login();
-  $("#t-ov").className="tab"+(tab==="overview"?" on":"");$("#t-su").className="tab"+(tab==="support"?" on":"");
+  $("#t-ov").className="tab"+(tab==="overview"?" on":"");$("#t-su").className="tab"+(tab==="support"?" on":"");$("#t-rf").className="tab"+(tab==="refunds"?" on":"");
   $("#filter").hidden=tab!=="support";$("#days").hidden=tab!=="overview";
-  sessionStorage.setItem("gr_admin_tab",tab);tab==="overview"?overview():list()}
+  sessionStorage.setItem("gr_admin_tab",tab);tab==="overview"?overview():tab==="refunds"?refundsView():list()}
 function bars(vals,color){const max=Math.max(1,...vals),w=100/vals.length;
   return '<svg viewBox="0 0 100 40" preserveAspectRatio="none">'+vals.map((v,i)=>'<rect x="'+(i*w+w*0.1)+'" y="'+(40-v/max*38)+'" width="'+w*0.8+'" height="'+(v/max*38)+'" fill="'+color+'"/>').join("")+'</svg>'}
 const tile=(l,v,sub)=>'<div class="tile"><span class="meta">'+l+'</span><b>'+v+'</b>'+(sub?'<span class="meta">'+sub+'</span>':'')+'</div>';
@@ -146,7 +199,7 @@ async function overview(){
   $("#view").innerHTML=
   '<h3>Errands (last '+d.days+' days)</h3><div class="grid">'+tile("Posted",I(e.posted))+tile("Delivered",I(e.delivered))+tile("Cancelled",I(e.cancelled))+tile("Completion rate",pct(e.completionRate))+tile("Avg time to deliver",e.avgMinutesToDeliver===null?"—":e.avgMinutesToDeliver+" min")+tile("Waiting for a runner now",I(e.openNow))+tile("In progress now",I(e.inProgressNow))+tile("Posted with AI help",I(e.aiParsed))+tile("From repeating errands",I(e.recurring))+'</div>'+
   '<h3>Errands per day (posted)</h3>'+bars(d.daily.map(x=>x.posted),"#a8a29e")+'<h3>Delivered per day</h3>'+bars(d.daily.map(x=>x.delivered),"#166534")+
-  '<h3>Money</h3><div class="grid">'+tile("Paid in",N(m.paidIn),"fees + items budgets")+tile("Delivery fees",N(m.feeVolume))+tile("Commission earned",N(m.commission),"on delivered errands")+tile("Average fee",m.avgFee===null?"—":N(m.avgFee))+tile("Referral credit given",N(m.referralCreditGiven))+tile("Paid out to runners",N(m.runnerPayoutsSent))+tile("Payouts in flight",N(m.runnerPayoutsPending))+'</div>'+
+  '<h3>Money</h3><div class="grid">'+tile("Paid in",N(m.paidIn),"fees + items budgets")+tile("Delivery fees",N(m.feeVolume))+tile("Commission earned",N(m.commission),"on delivered errands")+tile("Average fee",m.avgFee===null?"—":N(m.avgFee))+tile("Referral credit given",N(m.referralCreditGiven))+tile("Paid out to runners",N(m.runnerPayoutsSent))+tile("Payouts in flight",N(m.runnerPayoutsPending))+tile("Refunded",N(m.refunded))+(m.refundsNeedingAttention?tile("Refunds to retry",I(m.refundsNeedingAttention),"see Refunds tab"):"")+'</div>'+
   '<h3>Paid in per day</h3>'+bars(d.daily.map(x=>x.paidIn),"#0f766e")+
   '<h3>People</h3><div class="grid">'+tile("Requesters",I(u.requesters),"+"+I(u.newRequesters)+" new")+tile("Runners",I(u.runners),"+"+I(u.newRunners)+" new")+tile("Verified runners",I(u.verifiedRunners))+'</div><h3>New sign-ups per day</h3>'+bars(d.daily.map(x=>x.newUsers),"#7c3aed")+
   '<h3>Referrals</h3><div class="grid">'+tile("Joined with a code",I(r.invited))+tile("Completed first errand",I(r.qualified))+tile("Rewards issued",N(r.rewardsIssued))+tile("Rewards used",N(r.rewardsUsedNaira))+tile("Rewards waiting",N(r.rewardsOutstandingNaira),"still owed as credit/bonus")+'</div>'+
@@ -155,6 +208,14 @@ async function overview(){
   '<h3>Top runners</h3><table>'+(d.topRunners.length?d.topRunners.map(t=>'<tr><td>'+esc(t.name)+'</td><td>'+esc(t.tier)+'</td><td>'+I(t.delivered)+' delivered</td></tr>').join(""):'<tr><td>No deliveries yet</td></tr>')+'</table>'+
   '<div class="row"><button class="alt" id="csv">Download daily numbers (CSV)</button></div>';
   $("#csv").onclick=async()=>{const r=await fetch("/admin/api/analytics/daily.csv?days="+$("#days").value,{headers:{"x-admin-key":key}});const b=await r.blob();const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="gracerandly-daily.csv";a.click()}
+  }catch(e){if(e.message!=="auth")$("#err").textContent=e.message}}
+async function refundsView(){
+  $("#err").textContent="";
+  try{const {refunds}=await api("/refunds");
+  $("#view").innerHTML='<h3>Refund a payment</h3><div class="row"><input id="rf-e" placeholder="Errand id" size="38"><input id="rf-a" type="number" placeholder="Amount (₦)"><input id="rf-n" placeholder="Reason" size="30"><button id="rf-go">Refund</button></div><h3>Recent refunds</h3>'+
+  '<table>'+(refunds.length?refunds.map(r=>'<tr><td>'+new Date(r.createdAt).toLocaleString()+'</td><td>'+N(r.amount)+'</td><td>'+esc(r.reason)+(r.note?' · '+esc(r.note):'')+'</td><td><span class="pill">'+r.status+'</span>'+(r.status==="failed"?' <button class="alt" data-retry="'+r.id+'">Retry</button><div class="meta">'+esc(r.failureReason||"")+'</div>':'')+'<div class="meta">errand '+r.errandId.slice(0,8)+'</div></td></tr>').join(""):'<tr><td>No refunds yet</td></tr>')+'</table>';
+  $("#rf-go").onclick=async()=>{try{await api("/refunds",{method:"POST",body:JSON.stringify({errandId:$("#rf-e").value.trim(),amount:Number($("#rf-a").value),note:$("#rf-n").value})});refundsView()}catch(e){$("#err").textContent=e.message}};
+  document.querySelectorAll("[data-retry]").forEach(b=>b.onclick=async()=>{try{await api("/refunds/"+b.dataset.retry+"/retry",{method:"POST"});refundsView()}catch(e){$("#err").textContent=e.message}})
   }catch(e){if(e.message!=="auth")$("#err").textContent=e.message}}
 async function list(){
   $("#err").textContent="";
@@ -170,7 +231,7 @@ async function open(id){
   $("#send").onclick=async()=>{const b=$("#body").value.trim();if(!b)return;try{await api("/support/tickets/"+id+"/messages",{method:"POST",body:JSON.stringify({body:b})});open(id)}catch(e){$("#err").textContent=e.message}};
   const st=s=>async()=>{try{await api("/support/tickets/"+id,{method:"PATCH",body:JSON.stringify({status:s})});list()}catch(e){$("#err").textContent=e.message}};
   $("#res").onclick=st("resolved");$("#cls").onclick=st("closed")}catch(e){if(e.message!=="auth")$("#err").textContent=e.message}}
-$("#t-ov").onclick=()=>{tab="overview";show()};$("#t-su").onclick=()=>{tab="support";show()};
+$("#t-rf").onclick=()=>{tab="refunds";show()};$("#t-ov").onclick=()=>{tab="overview";show()};$("#t-su").onclick=()=>{tab="support";show()};
 $("#filter").onchange=list;$("#days").onchange=overview;
 $("#out").onclick=()=>{sessionStorage.removeItem("gr_admin_key");key="";login()};show();
 </script></body></html>`;
