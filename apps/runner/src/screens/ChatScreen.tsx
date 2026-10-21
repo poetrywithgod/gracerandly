@@ -261,6 +261,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           participant={participant}
           callState={chat.callState}
           callMode={chat.callMode}
+          ringing={chat.callRinging}
           activeSince={chat.callActiveSince}
           onAccept={chat.acceptCall}
           onDecline={chat.declineCall}
@@ -270,8 +271,12 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       <NoticeModal
         visible={chat.callUnavailable}
-        title="Can't call right now"
-        body={`${otherName} isn't online in this chat.`}
+        title={chat.callUnavailableReason === "no-answer" ? "No answer" : "Can't call right now"}
+        body={
+          chat.callUnavailableReason === "no-answer"
+            ? `${otherName} didn't pick up. They've been sent a missed-call notification.`
+            : `${otherName} isn't online in this chat.`
+        }
         onClose={chat.dismissCallUnavailable}
       />
       <NoticeModal

@@ -22,6 +22,16 @@ function whenNavigatorReady(go: () => void, attemptsLeft = 40) {
   if (attemptsLeft > 0) setTimeout(() => whenNavigatorReady(go, attemptsLeft - 1), 250);
 }
 
+// A "someone is calling" push while the app is open: jump to that chat, where
+// the call screen shows (the server delivers the ringing invite as soon as the
+// chat connects). Ignored if the ring has already run out.
+function openRingingCall(data: Record<string, unknown> | undefined) {
+  if (data?.type !== "incoming_call" || typeof data.errandId !== "string") return;
+  if (typeof data.expiresAt === "number" && data.expiresAt < Date.now()) return;
+  const errandId = data.errandId;
+  whenNavigatorReady(() => navigationRef.navigate("Chat", { errandId }));
+}
+
 export default function PushHost() {
   const { token } = useAuth();
   const lastResponse = Notifications.useLastNotificationResponse();
@@ -29,6 +39,15 @@ export default function PushHost() {
 
   useEffect(() => {
     if (token) void registerForPush(token);
+  }, [token]);
+
+  // A call push arriving while the app is open: go straight to the call.
+  useEffect(() => {
+    if (!token) return;
+    const subscription = Notifications.addNotificationReceivedListener((notification) => {
+      openRingingCall(notification.request.content.data);
+    });
+    return () => subscription.remove();
   }, [token]);
 
   useEffect(() => {

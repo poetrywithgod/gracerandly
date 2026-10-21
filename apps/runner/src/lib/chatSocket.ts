@@ -15,9 +15,11 @@
  * local chat history — who started it, the outcome and how long it lasted.
  * Both phones see the same signaling, so both end up with the same entry.
  *
- * Calls only ring while this hook is mounted (i.e. the chat screen is
- * open) — there's no app-wide socket yet, so an app that isn't on the chat
- * screen can't be rung. Worth revisiting alongside push notifications.
+ * Calls ring live while this hook is mounted (the chat screen is open). If
+ * the other phone isn't in the chat, the server sends it a push and holds the
+ * call for 45 seconds ("call-ringing"); opening the chat from that push
+ * delivers the invite on join. The caller sees "call-unavailable" with
+ * reason "no-answer" if nobody picks up.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE_URL } from "./apiClient";
@@ -36,7 +38,8 @@ function wsUrl(errandId: string, token: string): string {
 }
 
 interface ServerMessage {
-  type: "message" | "stored" | "error" | "call-invite" | "call-accept" | "call-decline" | "call-end" | "call-unavailable";
+  type: "message" | "stored" | "error" | "call-invite" | "call-accept" | "call-decline" | "call-end" | "call-unavailable" | "call-ringing";
+  reason?: "no-answer";
   id?: string;
   errandId?: string;
   senderRole?: ChatRole;
@@ -63,6 +66,9 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
   const [callState, setCallState] = useState<CallState>("idle");
   const [callMode, setCallMode] = useState<CallMode>("audio");
   const [callUnavailable, setCallUnavailable] = useState(false);
+  const [callUnavailableReason, setCallUnavailableReason] = useState<"offline" | "no-answer">("offline");
+  // The other phone isn't running the chat but has been sent a call push.
+  const [callRinging, setCallRinging] = useState(false);
   // When the current call was answered (ms since epoch) — drives the on-screen timer.
   const [callActiveSince, setCallActiveSince] = useState<number | null>(null);
 
@@ -90,6 +96,7 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
   const setCall = useCallback((next: CallState) => {
     callStateRef.current = next;
     setCallState(next);
+    if (next !== "outgoing") setCallRinging(false);
   }, []);
 
   /** Ends the current call locally and writes its entry into the chat. Safe
@@ -202,8 +209,12 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
             // answered = a missed one (for the person who was being rung).
             finishCall(callStateRef.current === "active" ? "completed" : "missed");
             break;
+          case "call-ringing":
+            if (callStateRef.current === "outgoing") setCallRinging(true);
+            break;
           case "call-unavailable":
             finishCall("missed");
+            setCallUnavailableReason(data.reason === "no-answer" ? "no-answer" : "offline");
             setCallUnavailable(true);
             break;
         }
@@ -271,6 +282,7 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
   const startCall = useCallback(
     (mode: CallMode) => {
       setCallUnavailable(false);
+      setCallUnavailableReason("offline");
       if (rawSend({ type: "call-invite", mode })) {
         callMetaRef.current = { caller: role, mode, activeSince: null };
         setCallMode(mode);
@@ -311,6 +323,8 @@ export function useChat({ errandId, token, ownUserId, role }: UseChatArgs) {
     callMode,
     callActiveSince,
     callUnavailable,
+    callUnavailableReason,
+    callRinging,
     dismissCallUnavailable,
     startCall,
     acceptCall,

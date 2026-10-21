@@ -57,10 +57,13 @@
  *     a security boundary; the apps only show an "edit" option on a
  *     user's own bubbles.
  *   { type: "call-invite", mode: "audio"|"video" }
- *     Requests a call. Relayed live to the recipient ONLY if they're
- *     currently connected — there is no queuing for calls, so if they're
- *     not connected the server immediately replies to the caller with
- *     { type: "call-unavailable" } instead of silently doing nothing.
+ *     Requests a call. Relayed live to the recipient if they're connected.
+ *     If not, the call "rings" for 45 seconds: the caller gets
+ *     { type: "call-ringing" }, the recipient's phone gets a high-priority
+ *     push, and if they open the chat in time the invite is delivered on
+ *     join. If nobody picks up the caller gets
+ *     { type: "call-unavailable", reason: "no-answer" } and the recipient a
+ *     "missed call" push.
  *   { type: "call-accept" } / { type: "call-decline" } / { type: "call-end" }
  *     Relayed live to the other party. No-ops (silently) if they've
  *     disconnected in the meantime — the caller's own client already
@@ -75,9 +78,10 @@
  *     Acknowledges a message/edit this connection just sent.
  *   { type: "call-invite", mode, fromRole } / "call-accept" / "call-decline" / "call-end"
  *     Forwarded from the other party — see the client-message docs above.
- *   { type: "call-unavailable" }
- *     Sent back to a caller whose call-invite couldn't be delivered
- *     because the other party isn't connected right now.
+ *   { type: "call-ringing" }
+ *     Sent to a caller whose invite is waiting on a phone that isn't connected.
+ *   { type: "call-unavailable", reason? }
+ *     Sent to a caller whose call went unanswered (reason "no-answer").
  *   { type: "error", message }
  *     Something about the last client message was invalid; connection
  *     stays open.
@@ -167,13 +171,34 @@ function send(ws: WebSocket, payload: unknown) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
 }
 
+// A call to someone who isn't connected "rings" for a while: the other phone
+// gets a high-priority push, and if they open the chat before it runs out the
+// invite is delivered then, as if they'd been connected all along.
+const RING_SECONDS = Number(process.env.CALL_RING_SECONDS) > 0 ? Number(process.env.CALL_RING_SECONDS) : 45;
+
+interface PendingCall {
+  callerRole: "requester" | "runner";
+  callerWs: WebSocket;
+  mode: "audio" | "video";
+  timer: ReturnType<typeof setTimeout>;
+}
+const pendingCalls = new Map<string, PendingCall>();
+
+function clearPendingCall(errandId: string): PendingCall | undefined {
+  const pending = pendingCalls.get(errandId);
+  if (!pending) return undefined;
+  clearTimeout(pending.timer);
+  pendingCalls.delete(errandId);
+  return pending;
+}
+
 /** Tells the other party about something that happened while they have no
  * live connection (app closed or backgrounded). Best-effort: never throws
  * and never delays the sender — callers fire it with `void`. */
 async function pushToOfflineRecipient(
   conn: Connection,
-  kind: "message" | "call",
-  preview: { contentType?: "text" | "audio"; content?: string }
+  kind: "message" | "call" | "ringing",
+  preview: { contentType?: "text" | "audio"; content?: string; mode?: "audio" | "video" }
 ) {
   try {
     const [errand] = await db.select().from(errands).where(eq(errands.id, conn.errandId)).limit(1);
@@ -187,6 +212,19 @@ async function pushToOfflineRecipient(
         ? await db.select({ fullName: requesters.fullName }).from(requesters).where(eq(requesters.id, conn.userId)).limit(1)
         : await db.select({ fullName: runners.fullName }).from(runners).where(eq(runners.id, conn.userId)).limit(1);
     const name = sender?.fullName?.trim().split(/\s+/)[0] || (conn.role === "runner" ? "Your runner" : "Your requester");
+
+    if (kind === "ringing") {
+      const mode = preview.mode ?? "audio";
+      await sendPushToUser(recipientRole, recipientId, {
+        title: `${name} is calling`,
+        body: `Incoming ${mode === "video" ? "video" : "voice"} call. Tap to answer.`,
+        data: { type: "incoming_call", errandId: conn.errandId, mode, expiresAt: Date.now() + RING_SECONDS * 1000 },
+        channelId: "incoming_calls",
+        // A call that rang out must not ring a phone that was off for an hour.
+        ttl: RING_SECONDS,
+      });
+      return;
+    }
 
     if (kind === "call") {
       await sendPushToUser(recipientRole, recipientId, {
@@ -270,12 +308,26 @@ async function handleClientMessage(conn: Connection, raw: unknown) {
   }
 
   if (data.type === "call-invite" || data.type === "call-accept" || data.type === "call-decline" || data.type === "call-end") {
+    // Whatever happens next, a new signal supersedes a call that was still ringing.
+    const wasRinging = data.type === "call-invite" ? undefined : clearPendingCall(conn.errandId);
+    if (data.type === "call-invite") clearPendingCall(conn.errandId);
+
     const recipient = recipientOf(conn);
     if (!recipient) {
       if (data.type === "call-invite") {
-        send(conn.ws, { type: "call-unavailable" });
-        // A live call can't ring a closed app, but a "missed call"
-        // notification at least tells them to open the chat.
+        const mode = data.mode;
+        const timer = setTimeout(() => {
+          // Nobody picked up: the caller finds out, the callee gets a
+          // "missed call" they can tap to open the chat.
+          if (!clearPendingCall(conn.errandId)) return;
+          send(conn.ws, { type: "call-unavailable", reason: "no-answer" });
+          void pushToOfflineRecipient(conn, "call", {});
+        }, RING_SECONDS * 1000);
+        pendingCalls.set(conn.errandId, { callerRole: conn.role, callerWs: conn.ws, mode, timer });
+        send(conn.ws, { type: "call-ringing" });
+        void pushToOfflineRecipient(conn, "ringing", { mode });
+      } else if (data.type === "call-end" && wasRinging && wasRinging.callerWs === conn.ws) {
+        // The caller hung up while it was still ringing.
         void pushToOfflineRecipient(conn, "call", {});
       }
       return;
@@ -365,6 +417,12 @@ export function attachChatServer(server: HttpServer): void {
     const conn: Connection = { ...result, ws };
     joinRoom(conn);
     await flushQueuedMessages(conn);
+    // They opened the chat while a call is still ringing for them.
+    const ringing = pendingCalls.get(conn.errandId);
+    if (ringing && ringing.callerRole !== conn.role && ringing.callerWs.readyState === WebSocket.OPEN) {
+      send(ws, { type: "call-invite", mode: ringing.mode, fromRole: ringing.callerRole });
+      clearPendingCall(conn.errandId);
+    }
 
     onMessage = (raw) => {
       let parsed: unknown;
@@ -382,6 +440,11 @@ export function attachChatServer(server: HttpServer): void {
 
     ws.on("close", () => {
       leaveRoom(conn);
+      const ringingFromUs = pendingCalls.get(conn.errandId);
+      if (ringingFromUs && ringingFromUs.callerWs === ws) {
+        clearPendingCall(conn.errandId);
+        void pushToOfflineRecipient(conn, "call", {});
+      }
       // A dropped connection mid-call should look like a hangup to the
       // other party — they have no other way to find out.
       const recipient = recipientOf(conn);

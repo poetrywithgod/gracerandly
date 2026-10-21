@@ -47,6 +47,23 @@ async function ensureAndroidChannels() {
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 500, 250, 500],
   });
+  // A call ringing a phone that isn't running the app. MAX importance so it
+  // pops up over whatever is on screen, ringtone audio usage so it uses the
+  // ringer volume, and a long vibration so it feels like a call. (Channel
+  // settings can't be changed once a phone has created the channel, which is
+  // why this is its own channel rather than a tweak to "calls".)
+  await Notifications.setNotificationChannelAsync("incoming_calls", {
+    name: "Incoming calls",
+    importance: Notifications.AndroidImportance.MAX,
+    sound: "default",
+    enableVibrate: true,
+    vibrationPattern: [0, 1000, 700, 1000, 700, 1000, 700, 1000],
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    audioAttributes: {
+      usage: Notifications.AndroidAudioUsage.NOTIFICATION_RINGTONE,
+      contentType: Notifications.AndroidAudioContentType.SONIFICATION,
+    },
+  });
 }
 
 // Only the first time: if the person said no to our explanation card we

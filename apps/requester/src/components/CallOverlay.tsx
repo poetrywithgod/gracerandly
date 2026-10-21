@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator, Vibration } from "react-native";
 import type { IRtcEngine } from "react-native-agora";
 import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, SwitchCamera } from "lucide-react-native";
 import { getTheme } from "@gracerandly/theme";
@@ -18,6 +18,8 @@ interface CallOverlayProps {
   participant: ChatParticipant | null;
   callState: CallState;
   callMode: CallMode;
+  /** The other phone has been sent a call push (it wasn't in the chat). */
+  ringing?: boolean;
   /** When the call was answered (ms since epoch) — the timer counts up from here. */
   activeSince: number | null;
   onAccept: () => void;
@@ -42,6 +44,7 @@ export default function CallOverlay({
   participant,
   callState,
   callMode,
+  ringing = false,
   activeSince,
   onAccept,
   onDecline,
@@ -63,6 +66,14 @@ export default function CallOverlay({
     return () => clearInterval(interval);
   }, [callState, activeSince]);
   const elapsed = activeSince ? formatDuration((now - activeSince) / 1000) : null;
+
+  // Ring the phone while a call is waiting to be answered. Vibration is
+  // built in, so this works in every build — no sound file or native module.
+  useEffect(() => {
+    if (callState !== "incoming") return;
+    Vibration.vibrate([0, 800, 700], true);
+    return () => Vibration.cancel();
+  }, [callState]);
 
   const isVideo = callMode === "video";
   const name = participant?.name ?? (role === "runner" ? "Requester" : "Runner");
@@ -180,7 +191,9 @@ export default function CallOverlay({
             {error
               ? error
               : callState === "outgoing"
-                ? "Calling…"
+                ? ringing
+                  ? "Ringing…"
+                  : "Calling…"
                 : callState === "incoming"
                   ? `Incoming ${isVideo ? "video" : "voice"} call`
                   : remoteUid === null

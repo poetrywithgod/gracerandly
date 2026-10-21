@@ -23,7 +23,7 @@ export interface PushPayload {
   /** Delivered to the app; used to open the right screen on tap. */
   data?: Record<string, unknown>;
   /** Android notification channel created by the app (see apps/*\/src/lib/push.ts). */
-  channelId?: "messages" | "calls" | "errands";
+  channelId?: "messages" | "calls" | "errands" | "incoming_calls";
   /** Seconds Expo/FCM may hold the message if the phone is offline. */
   ttl?: number;
 }
