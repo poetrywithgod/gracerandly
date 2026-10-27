@@ -212,18 +212,22 @@ export default function HomeScreen() {
           <View style={styles.toggleCard}>
             <View style={styles.toggleTextWrap}>
               <Text style={styles.toggleTitle}>
-                {user?.isOnline ? "You're online" : user?.identityVerified ? "You're offline" : "Verification needed"}
+                {user?.isOnline ? "You're online" : user?.identityVerified ? "You're offline" : user?.verificationStatus === "pending" ? "Verification under review" : user?.verificationStatus === "rejected" ? "Verification sent back" : "Verification needed"}
               </Text>
               <Text style={styles.toggleSubtitle}>
                 {user?.isOnline
                   ? "Nearby errands will show up below"
                   : user?.identityVerified
                     ? "Go online to start seeing nearby errands"
-                    : "Complete identity verification before you can go online"}
+                    : user?.verificationStatus === "pending"
+                      ? "We'll notify you when you're approved"
+                      : user?.verificationStatus === "rejected"
+                        ? "Fix the details and submit again"
+                        : "Complete identity verification before you can go online"}
               </Text>
             </View>
             <Button
-              label={user?.isOnline ? "Go offline" : user?.identityVerified ? "Go online" : "Verify"}
+              label={user?.isOnline ? "Go offline" : user?.identityVerified ? "Go online" : user?.verificationStatus === "pending" ? "View" : user?.verificationStatus === "rejected" ? "Fix" : "Verify"}
               onPress={handleToggleOnline}
               variant={user?.isOnline ? "danger" : "primary"}
               loading={isTogglingOnline}

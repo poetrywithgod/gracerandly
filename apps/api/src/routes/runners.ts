@@ -89,6 +89,8 @@ function toRunner(row: typeof runners.$inferSelect): Runner {
     nin: row.nin ?? undefined,
     bvn: row.bvn ?? undefined,
     identityVerified: row.identityVerified,
+    verificationStatus: row.verificationStatus,
+    verificationNote: row.verificationNote ?? undefined,
     guarantor: row.guarantor ?? undefined,
     payoutAccount:
       row.bankName && row.bankAccountNumber && row.bankAccountName
@@ -628,16 +630,11 @@ router.get(
   })
 );
 
-// Submits NIN/BVN/guarantor from the Runner app's Settings screen — see
-// submitVerificationSchema's comment for why this is separate from
-// signup. Sets identityVerified true immediately on submission: there's
-// no Trust & Safety admin review flow or NIMC/bank registry check yet
-// (schema.ts's identityVerified comment), so for now "submitted the
-// form" *is* "verified". Revisit once real verification/admin review
-// exists — this should gate on an admin approving it, not on submission.
-// Once verified, this locks — there's no re-submission flow yet (would
-// need to decide whether changing NIN/BVN should un-verify the account,
-// which is really an admin-review decision, not a self-serve one).
+// Submits NIN/BVN/guarantor from the Runner app's Settings screen. The
+// submission goes to staff review (lib/identity-review.ts): the runner is
+// "pending" until someone approves it in the admin dashboard, and only then
+// does identityVerified turn true and the runner can go online. A rejected
+// runner can fix the details and submit again.
 router.patch(
   "/me/verification",
   requireRunnerAuth,
@@ -645,6 +642,9 @@ router.patch(
     const existing = await loadOwnRunner(req.runnerId!);
     if (existing.identityVerified) {
       throw AppErrors.conflict("Your identity is already verified");
+    }
+    if (existing.verificationStatus === "pending") {
+      throw AppErrors.conflict("Your details are already being reviewed");
     }
 
     const input = submitVerificationSchema.parse(req.body);
@@ -655,7 +655,11 @@ router.patch(
         nin: input.nin,
         bvn: input.bvn,
         guarantor: input.guarantor,
-        identityVerified: true,
+        identityVerified: false,
+        verificationStatus: "pending",
+        verificationNote: null,
+        verificationSubmittedAt: new Date(),
+        verificationReviewedAt: null,
       })
       .where(eq(runners.id, req.runnerId!))
       .returning();

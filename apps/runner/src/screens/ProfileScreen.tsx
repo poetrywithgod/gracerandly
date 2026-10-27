@@ -384,10 +384,16 @@ export default function ProfileScreen() {
               )}
               <View style={styles.rowLeftText}>
                 <Text style={styles.rowLabel}>
-                  {user.identityVerified ? "Identity verified" : "Verification required"}
+                  {user.identityVerified ? "Identity verified" : user.verificationStatus === "pending" ? "Verification under review" : user.verificationStatus === "rejected" ? "Verification sent back" : "Verification required"}
                 </Text>
                 {!user.identityVerified ? (
-                  <Text style={styles.rowHint}>Submit your NIN, BVN and a guarantor to go online</Text>
+                  <Text style={styles.rowHint}>
+                    {user.verificationStatus === "pending"
+                      ? "We'll notify you when you're approved"
+                      : user.verificationStatus === "rejected"
+                        ? user.verificationNote ?? "Fix your details and submit again"
+                        : "Submit your NIN, BVN and a guarantor to go online"}
+                  </Text>
                 ) : (
                   <Text style={styles.rowHint}>
                     NIN {maskId(user.nin ?? "")} · BVN {maskId(user.bvn ?? "")}

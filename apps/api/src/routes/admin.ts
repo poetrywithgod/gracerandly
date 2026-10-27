@@ -9,6 +9,7 @@ import { errands, refunds } from "../db/schema";
 import { dailyCsv, getAnalytics } from "../lib/analytics";
 import { ADMIN_PAGE, ADMIN_PAGE_CSP } from "../lib/adminPage";
 import { adminSearch, getInsights } from "../lib/insights";
+import { approve, getReview, listReviews, reject, rejectSchema, reviewCounts } from "../lib/identity-review";
 import { findPaidTransaction, issueRefund, retryRefund } from "../lib/refunds";
 import { SUPPORT_STATUSES, adminGet, adminList, adminReply, adminSetStatus, replySchema } from "../lib/support";
 
@@ -115,6 +116,41 @@ router.get(
     const days = Number(typeof req.query.days === "string" ? req.query.days : 30);
     res.type("text/csv").setHeader("Content-Disposition", 'attachment; filename="gracerandly-daily.csv"');
     res.send(dailyCsv(await getAnalytics(days)));
+  })
+);
+
+// Identity verification review (Verification page).
+router.get(
+  "/api/verifications",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    res.json({ runners: await listReviews(status), counts: await reviewCounts() });
+  })
+);
+
+router.get(
+  "/api/verifications/:id",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await getReview(z.uuid().parse(req.params.id)));
+  })
+);
+
+router.post(
+  "/api/verifications/:id/approve",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await approve(z.uuid().parse(req.params.id)));
+  })
+);
+
+router.post(
+  "/api/verifications/:id/reject",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { reason } = rejectSchema.parse(req.body);
+    res.json(await reject(z.uuid().parse(req.params.id), reason));
   })
 );
 

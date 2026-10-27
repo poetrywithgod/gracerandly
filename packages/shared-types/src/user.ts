@@ -55,6 +55,8 @@ export interface PayoutAccount {
   verified: boolean;
 }
 
+export type VerificationStatus = "unsubmitted" | "pending" | "approved" | "rejected";
+
 export interface Runner extends BaseUser {
   role: "runner";
   /** Data URI (or hosted URL, once real object storage exists) — undefined until the runner sets one. */
@@ -69,6 +71,10 @@ export interface Runner extends BaseUser {
   nin?: string;
   bvn?: string;
   identityVerified: boolean;
+  /** Where the submission stands: staff review it before identityVerified turns true. */
+  verificationStatus: VerificationStatus;
+  /** Staff's reason when the submission was rejected; shown to the runner. */
+  verificationNote?: string;
   guarantor?: Guarantor;
   payoutAccount?: PayoutAccount;
   /**

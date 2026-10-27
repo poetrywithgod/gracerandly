@@ -64,6 +64,9 @@ export const trustTierLevelEnum = pgEnum("trust_tier_level", [
   "gold",
 ]);
 
+// Where a runner's identity submission stands (lib/identity-review.ts).
+export const verificationStatusEnum = pgEnum("verification_status", ["unsubmitted", "pending", "approved", "rejected"]);
+
 // Mirrors packages/shared-types' VehicleType union.
 export const vehicleTypeEnum = pgEnum("vehicle_type", ["bicycle", "motorcycle", "car", "on_foot"]);
 
@@ -93,7 +96,15 @@ export const runners = pgTable("runners", {
   // caveat), it's just the gate on going online / accepting errands.
   nin: text("nin"),
   bvn: text("bvn"),
+  // identityVerified is now the *result* of staff review, not of submitting
+  // the form: it is true only while verificationStatus is "approved" (see
+  // lib/identity-review.ts). Submitting moves unsubmitted/rejected -> pending;
+  // staff then approve or reject (with a reason the runner sees).
   identityVerified: boolean("identity_verified").notNull().default(false),
+  verificationStatus: verificationStatusEnum("verification_status").notNull().default("unsubmitted"),
+  verificationNote: text("verification_note"),
+  verificationSubmittedAt: timestamp("verification_submitted_at", { withTimezone: true }),
+  verificationReviewedAt: timestamp("verification_reviewed_at", { withTimezone: true }),
   guarantor: jsonb("guarantor").$type<Guarantor>(),
   // Where a runner's payout lands (PRD 6.7) — bankName/bankAccountNumber/
   // bankAccountName are collected together; toRunner() in

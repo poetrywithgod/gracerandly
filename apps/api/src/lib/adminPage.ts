@@ -238,6 +238,7 @@ var IC={
  ne:'<path d="M7 17L17 7M8 7h9v9"/>',
  down:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
  refresh:'<path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/>',
+ shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>',
  ok:'<path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"/><path d="M22 4L12 14l-3-3"/>',
  grocery:'<path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
  pharmacy:'<path d="M12 5v14M5 12h14"/>',
@@ -385,13 +386,15 @@ function attentionItems(i){
   if(a.activeSos)out.push({n:a.activeSos,text:a.activeSos===1?"SOS alert is active":"SOS alerts are active",tone:"red",hint:"The safety team has been texted. Check on the errand.",go:null});
   if(a.failedRefunds)out.push({n:a.failedRefunds,text:a.failedRefunds===1?"refund failed":"refunds failed",tone:"red",hint:"Paystack rejected them. Retry from the Refunds page.",go:"refunds"});
   if(a.failedPayouts)out.push({n:a.failedPayouts,text:a.failedPayouts===1?"runner payout failed":"runner payouts failed",tone:"red",hint:"Check the runner's bank details in Paystack.",go:null});
+  if(a.pendingVerifications)out.push({n:a.pendingVerifications,text:a.pendingVerifications===1?"runner is waiting for identity review":"runners are waiting for identity review",tone:"violet",hint:"They can\u2019t go online until you approve them.",go:"verification"});
   if(a.longWaitingErrands)out.push({n:a.longWaitingErrands,text:a.longWaitingErrands===1?"errand has waited over "+a.longWaitMinutes+" min":"errands have waited over "+a.longWaitMinutes+" min",tone:"amber",hint:"No runner has accepted yet.",go:null});
   if(a.ticketsNeedingReply)out.push({n:a.ticketsNeedingReply,text:a.ticketsNeedingReply===1?"support ticket is open":"support tickets are open",tone:"violet",hint:"Reply or mark them resolved on the Support page.",go:"support"});
   return out;
 }
 function badges(i){
   var a=i.attention;
-  var s=$("#b-support"),r=$("#b-refunds"),bell=$("#bell-n");
+  var s=$("#b-support"),r=$("#b-refunds"),v=$("#b-verification"),bell=$("#bell-n");
+  if(v){v.textContent=a.pendingVerifications;v.hidden=!a.pendingVerifications}
   if(s){s.textContent=a.ticketsNeedingReply;s.hidden=!a.ticketsNeedingReply}
   if(r){r.textContent=a.failedRefunds;r.hidden=!a.failedRefunds}
   var total=attentionItems(i).reduce(function(t,x){return t+x.n},0);
@@ -399,7 +402,8 @@ function badges(i){
 }
 
 /* ---------- shell ---------- */
-var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["support","Support","msg"],["refunds","Refunds","undo"]];
+var GOLABEL={refunds:"refunds",support:"support",verification:"verification"};
+var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["verification","Verification","shield"],["support","Support","msg"],["refunds","Refunds","undo"]];
 function renderLogin(msg){
   $("#app").innerHTML='<div class="login">'+LOGO+'<h1>Gracerandly admin</h1><p>Enter the admin key to continue.</p>'+(msg?'<div class="err">'+esc(msg)+'</div>':'')+'<input id="k" type="password" placeholder="Admin key" autocomplete="current-password" aria-label="Admin key"><button class="btn" id="go">Sign in</button></div>';
   var go=function(){key=$("#k").value.trim();if(!key)return;sessionStorage.setItem("gr_admin_key",key);start()};
@@ -407,7 +411,7 @@ function renderLogin(msg){
 }
 function renderShell(){
   $("#app").innerHTML='<div class="shell"><aside class="side"><div class="brand">'+LOGO+'Gracerandly<small>admin</small></div>'+
-  '<div class="navh">Menu</div><ul class="nav">'+NAV.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
+  '<div class="navh">Menu</div><ul class="nav">'+NAV.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
   '<div class="navh" style="margin-top:22px">General</div><ul class="nav"><li><button id="refresh">'+icon("refresh")+'Refresh data</button></li><li><button id="out">'+icon("out")+'Sign out</button></li></ul>'+
   '<div class="sidecard"><h4>Daily numbers</h4><p>Errands, money and sign-ups for every day, ready for a spreadsheet.</p><button id="csv">'+icon("down")+'Download CSV</button></div></aside>'+
   '<div class="main"><header class="top"><div class="search"><span>'+icon("search")+'</span><input id="q" type="search" placeholder="Search errands, tickets, people" aria-label="Search" autocomplete="off"><span class="kbd">Ctrl K</span><div class="results" id="sr" hidden></div></div>'+
@@ -440,7 +444,7 @@ function wirePeriod(){var s=$("#days");if(s)s.onchange=function(){days=Number(s.
 function route(force){
   $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")===page);if(b.getAttribute("data-page")===page)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});
   var c=$("#content");
-  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="support")supportPage();else refundsPage();
+  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="verification")verificationPage();else if(page==="support")supportPage();else refundsPage();
   window.scrollTo(0,0);
 }
 function withData(force,render){
@@ -486,7 +490,7 @@ function dashboardPage(force){
     var top1=att[0];
     var attHtml='<section class="card att"><h3>Needs attention</h3>'+(top1?
       '<div class="top1">'+top1.n+" "+esc(top1.text)+'</div><p class="desc">'+esc(top1.hint)+'</p>'+(att.length>1?'<ul>'+att.slice(1,4).map(function(x){return '<li><span class="tone '+x.tone+'"></span>'+x.n+" "+esc(x.text)+'</li>'}).join("")+'</ul>':'')+
-      (top1.go?'<button class="btn" data-go="'+top1.go+'">Open '+(top1.go==="refunds"?"refunds":"support")+'</button>':(att.some(function(x){return x.go})?'<button class="btn ghost" data-go="'+att.filter(function(x){return x.go})[0].go+'">Open '+(att.filter(function(x){return x.go})[0].go==="refunds"?"refunds":"support")+'</button>':'')):
+      (top1.go?'<button class="btn" data-go="'+top1.go+'">Open '+GOLABEL[top1.go]+'</button>':(att.some(function(x){return x.go})?'<button class="btn ghost" data-go="'+att.filter(function(x){return x.go})[0].go+'">Open '+GOLABEL[att.filter(function(x){return x.go})[0].go]+'</button>':'')):
       '<div class="clear">'+icon("ok")+'All clear</div><p class="desc">Nothing is waiting on staff right now.</p>')+'</section>';
     var latest='<section class="card"><div class="cardh"><h3>Latest errands</h3></div><ul class="list">'+(i.recentErrands.length?i.recentErrands.slice(0,5).map(function(x){return '<li><span class="gl">'+icon(x.category)+'</span><div class="grow"><div class="t">'+esc(CATNAME[x.category]||x.category)+" · "+N(x.fee)+'</div><div class="m">'+esc(x.requester)+" · "+ago(x.createdAt)+'</div></div>'+statusPill(x.status)+'</li>'}).join(""):'<li class="muted">No errands yet.</li>')+'</ul></section>';
     var runners='<section class="card"><div class="cardh"><h3>Top runners</h3></div><p class="sub">Most deliveries in the last '+d.days+' days</p><ul class="list">'+(i.topRunners.length?i.topRunners.slice(0,4).map(function(r){return '<li><span class="av" style="background:'+avColor(r.name)+'">'+esc(initials(r.name))+'</span><div class="grow"><div class="t">'+esc(r.name)+'</div><div class="m">'+r.delivered+(r.delivered===1?" delivery":" deliveries")+" · "+N(r.earned)+(r.rating?" · "+r.rating+" stars":"")+'</div></div><span class="pillx '+(TIERCLS[r.tier]||"p-mute")+'">'+esc(r.tier.charAt(0).toUpperCase()+r.tier.slice(1))+'</span></li>'}).join(""):'<li class="muted">No deliveries yet.</li>')+'</ul></section>';
@@ -567,6 +571,46 @@ function analyticsPage(force){
   });
 }
 
+/* ---------- verification ---------- */
+var vFilter="pending";
+function verificationPage(){
+  var c=$("#content");c.setAttribute("data-page","verification");
+  c.innerHTML=head("Verification","Review the ID details runners submit. Runners can’t go online until you approve them.",'<select class="btn" id="vf" aria-label="Show runners"><option value="pending">Waiting for review</option><option value="rejected">Sent back</option><option value="approved">Approved</option><option value="unsubmitted">Not submitted</option></select>')+'<div id="view">Loading…</div>';
+  var f=$("#vf");f.value=vFilter;f.onchange=function(){vFilter=f.value;verificationList()};
+  load(false).then(function(d){badges(d.i)}).catch(function(){});
+  verificationList();
+}
+function vLabel(s){return s==="pending"?"Waiting":s==="rejected"?"Sent back":s==="approved"?"Approved":"Not submitted"}
+function verificationList(){
+  api("/verifications?status="+vFilter).then(function(r){
+    $("#view").innerHTML=r.runners.length?r.runners.map(function(x){
+      return '<button class="tk" data-id="'+x.id+'"><span class="av" style="background:'+avColor(x.fullName)+'">'+esc(initials(x.fullName))+'</span><div class="grow" style="flex:1;min-width:0"><div class="t" style="font-weight:600">'+esc(x.fullName)+'</div><div class="m muted" style="font-size:12px">'+esc(x.phone)+(x.ninMasked?" · NIN "+esc(x.ninMasked):"")+(x.submittedAt?" · submitted "+ago(x.submittedAt):"")+'</div></div><span class="pillx '+(x.status==="pending"?"p-warn":x.status==="approved"?"p-good":x.status==="rejected"?"p-bad":"p-mute")+'">'+vLabel(x.status)+'</span></button>'}).join(""):'<div class="card"><div class="clear">'+icon("ok")+'Nothing here</div><p class="desc muted">No runners in this list.</p></div>';
+    $$(".tk").forEach(function(b){b.onclick=function(){verificationOpen(b.getAttribute("data-id"))}});
+  }).catch(fail);
+}
+function maskId(v){return v?v.slice(0,3)+" •••• "+v.slice(-3):"—"}
+function verificationOpen(id){
+  page="verification";sessionStorage.setItem("gr_admin_page",page);
+  api("/verifications/"+id).then(function(r){
+    var x=r.runner,g=x.guarantor,fl=r.flags,c=$("#content"),st=x.status;c.setAttribute("data-page","verification");
+    $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")==="verification")});
+    var flags=[];
+    if(fl.otherAccountsWithSameId)flags.push(fl.otherAccountsWithSameId+(fl.otherAccountsWithSameId===1?" other account uses":" other accounts use")+" the same NIN or BVN");
+    if(fl.otherRunnersWithSameGuarantor)flags.push(fl.otherRunnersWithSameGuarantor+(fl.otherRunnersWithSameGuarantor===1?" other runner lists":" other runners list")+" the same guarantor phone");
+    c.innerHTML=head(esc(x.fullName),esc(x.phone)+(x.email?" · "+esc(x.email):"")+" · joined "+new Date(x.joinedAt).toLocaleDateString()+" · "+x.deliveredErrands+" deliveries",'<button class="btn ghost" id="back">Back to list</button>')+
+    (flags.length?'<div class="err" style="background:var(--warnbg);color:var(--warn)"><b>Check before approving</b><ul style="margin:6px 0 0 18px;padding:0">'+flags.map(function(t){return '<li>'+esc(t)+'</li>'}).join("")+'</ul></div>':'')+
+    '<div class="grid"><section class="card c6"><h3>Identity</h3><div class="kv"><span>NIN</span><b id="nin">'+esc(maskId(x.nin))+'</b><span>BVN</span><b id="bvn">'+esc(maskId(x.bvn))+'</b></div>'+(x.nin||x.bvn?'<p style="margin:12px 0 0"><button class="btn ghost small" id="show">Show full numbers</button></p>':'')+
+    '<p class="sub" style="margin-top:14px">These are only checked for format. Compare them with what you know about the runner before approving.</p></section>'+
+    '<section class="card c6"><h3>Guarantor</h3>'+(g?'<div class="kv"><span>Name</span><b>'+esc(g.fullName)+'</b><span>Phone</span><b>'+esc(g.phone)+'</b><span>Relationship</span><b>'+esc(g.relationship)+'</b></div>':'<p class="muted">No guarantor submitted.</p>')+'</section>'+
+    '<section class="card c12"><h3>Decision</h3><p class="sub">Status: <b>'+esc(vLabel(st))+'</b>'+(x.submittedAt?" · submitted "+new Date(x.submittedAt).toLocaleString():"")+(x.reviewedAt&&st!=="pending"?" · reviewed "+new Date(x.reviewedAt).toLocaleString():"")+'</p>'+(x.note&&st==="rejected"?'<p class="muted">Reason sent to the runner: '+esc(x.note)+'</p>':'')+
+    (st==="unsubmitted"?'<p class="muted">This runner hasn’t submitted their details yet.</p>':'<textarea class="in" id="why" placeholder="'+(st==="approved"?"Why you are removing this runner’s verification (the runner sees this)":"If you send this back, tell the runner what to fix (the runner sees this)")+'" aria-label="Reason"></textarea><div class="fld">'+(st!=="approved"?'<button class="btn" id="ok">Approve runner</button>':'')+'<button class="btn ghost" id="no">'+(st==="approved"?"Remove verification":"Send back with this reason")+'</button></div>')+'</section></div>';
+    $("#back").onclick=function(){verificationPage()};
+    var sh=$("#show");if(sh)sh.onclick=function(){$("#nin").textContent=x.nin||"—";$("#bvn").textContent=x.bvn||"—";sh.hidden=true};
+    var ok=$("#ok");if(ok)ok.onclick=function(){ok.disabled=true;api("/verifications/"+id+"/approve",{method:"POST"}).then(function(){cache=null;verificationPage()}).catch(function(e){ok.disabled=false;fail(e)})};
+    var no=$("#no");if(no)no.onclick=function(){var w=$("#why").value.trim();if(w.length<5){fail(new Error("Write a reason of at least 5 characters"));return}no.disabled=true;api("/verifications/"+id+"/reject",{method:"POST",body:JSON.stringify({reason:w})}).then(function(){cache=null;verificationPage()}).catch(function(e){no.disabled=false;fail(e)})};
+  }).catch(fail);
+}
+
 /* ---------- support ---------- */
 function supportPage(){
   var c=$("#content");c.setAttribute("data-page","support");
@@ -627,11 +671,11 @@ function wireSearch(){
         var h="";
         if(r.tickets.length)h+='<h5>Support tickets</h5>'+r.tickets.map(function(t){return '<button data-tk="'+t.id+'"><span class="gl">'+icon("msg")+'</span><span><b>'+esc(t.subject)+'</b><br><span class="muted" style="font-size:12px">'+esc(t.status.replace("_"," "))+'</span></span></button>'}).join("");
         if(r.errands.length)h+='<h5>Errands</h5>'+r.errands.map(function(x){return '<button data-er="'+x.id+'"><span class="gl">'+icon(x.category)+'</span><span><b>'+esc(CATNAME[x.category]||x.category)+" for "+esc(x.requester)+'</b><br><span class="muted" style="font-size:12px">'+esc(STATUS[x.status]||x.status)+" · "+esc(x.id.slice(0,8))+' · opens Refunds</span></span></button>'}).join("");
-        if(r.people.length)h+='<h5>People</h5>'+r.people.map(function(p){return '<button data-ph="'+esc(p.phone)+'"><span class="av" style="background:'+avColor(p.name)+';width:34px;height:34px">'+esc(initials(p.name))+'</span><span><b>'+esc(p.name)+'</b><br><span class="muted" style="font-size:12px">'+esc(p.role)+" · "+esc(p.phone)+'</span></span></button>'}).join("");
+        if(r.people.length)h+='<h5>People</h5>'+r.people.map(function(p){return '<button data-ph="'+esc(p.phone)+'" data-rv="'+(p.role==="runner"?esc(p.id):"")+'"><span class="av" style="background:'+avColor(p.name)+';width:34px;height:34px">'+esc(initials(p.name))+'</span><span><b>'+esc(p.name)+'</b><br><span class="muted" style="font-size:12px">'+esc(p.role)+" · "+esc(p.phone)+(p.role==="runner"?" · opens verification":"")+'</span></span></button>'}).join("");
         box.innerHTML=h||'<div class="nothing">No matches for “'+esc(v)+'”.</div>';box.hidden=false;
         $$("[data-tk]",box).forEach(function(b){b.onclick=function(){box.hidden=true;ticketOpen(b.getAttribute("data-tk"))}});
         $$("[data-er]",box).forEach(function(b){b.onclick=function(){box.hidden=true;prefillErrand=b.getAttribute("data-er");go("refunds")}});
-        $$("[data-ph]",box).forEach(function(b){b.onclick=function(){if(navigator.clipboard)navigator.clipboard.writeText(b.getAttribute("data-ph"));box.hidden=true}});
+        $$("[data-ph]",box).forEach(function(b){b.onclick=function(){box.hidden=true;var rv=b.getAttribute("data-rv");if(rv){verificationOpen(rv)}else if(navigator.clipboard){navigator.clipboard.writeText(b.getAttribute("data-ph"))}}});
       }).catch(fail);
     },250);
   };

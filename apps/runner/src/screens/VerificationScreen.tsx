@@ -3,9 +3,9 @@
 // signing in, it's a form the runner fills in from Settings whenever
 // they're ready. See routes/runners.ts's PATCH /me/verification and its
 // "self-serve auto-verify for now" comment for what happens server-side.
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, type LayoutChangeEvent } from "react-native";
-import { ShieldCheck } from "lucide-react-native";
+import { Clock, ShieldCheck } from "lucide-react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
 import TextField from "../components/TextField";
@@ -60,7 +60,13 @@ function validate(values: Record<FieldKey, string>): FieldErrors {
 }
 
 export default function VerificationScreen({ navigation }: Props) {
-  const { user, submitVerification, isLoading } = useAuth();
+  const { user, submitVerification, isLoading, refreshUser } = useAuth();
+
+  // While a review is pending, check for a decision whenever this screen opens.
+  useEffect(() => {
+    if (user?.verificationStatus === "pending") void refreshUser().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [values, setValues] = useState<Record<FieldKey, string>>({
     nin: "",
@@ -149,12 +155,31 @@ export default function VerificationScreen({ navigation }: Props) {
     );
   }
 
+  if (user?.verificationStatus === "pending") {
+    return (
+      <View style={styles.verifiedContainer}>
+        <Clock size={40} color={theme.colors.warning} />
+        <Text style={styles.verifiedTitle}>Your details are being reviewed</Text>
+        <Text style={styles.verifiedSubtitle}>
+          We&apos;ll send you a notification as soon as you&apos;re approved. You can go online after that.
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <ScrollView
       ref={scrollRef}
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
+      {user?.verificationStatus === "rejected" ? (
+        <View style={styles.rejectedBox}>
+          <Text style={styles.rejectedTitle}>Your details were sent back</Text>
+          <Text style={styles.rejectedText}>{user.verificationNote ?? "Please check your details and submit again."}</Text>
+        </View>
+      ) : null}
+
       <Text style={styles.intro}>
         We verify every runner's identity before they can go online or accept errands. This only
         takes a minute.
@@ -249,6 +274,16 @@ const styles = StyleSheet.create({
     color: theme.colors.danger,
     marginBottom: theme.spacing.sm,
   },
+  rejectedBox: {
+    backgroundColor: theme.colors.surface,
+    borderColor: theme.colors.danger,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.lg,
+  },
+  rejectedTitle: { fontFamily: theme.fonts.uiSemibold, fontSize: 14, color: theme.colors.danger, marginBottom: 4 },
+  rejectedText: { fontFamily: theme.fonts.ui, fontSize: 14, color: theme.colors.text, lineHeight: 20 },
   verifiedContainer: {
     flex: 1,
     alignItems: "center",

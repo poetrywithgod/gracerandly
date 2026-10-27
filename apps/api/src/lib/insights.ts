@@ -55,6 +55,7 @@ export interface Insights {
   }[];
   topRunners: { name: string; tier: string; delivered: number; earned: number; rating: number | null }[];
   attention: {
+    pendingVerifications: number;
     failedRefunds: number;
     failedPayouts: number;
     activeSos: number;
@@ -137,6 +138,7 @@ export async function getInsights(daysInput: number): Promise<Insights> {
         where e.status = 'delivered' and e.updated_at >= ${since}
         group by r.id, r.full_name, r.trust_tier_level order by 3 desc, 4 desc limit 6`),
       one<any>(sql`select
+          (select count(*) from runners where verification_status = 'pending') pending_verifications,
           (select count(*) from refunds where status = 'failed') failed_refunds,
           (select count(*) from runner_payouts where status = 'failed') failed_payouts,
           (select count(*) from sos_alerts where status = 'active') active_sos,
@@ -207,6 +209,7 @@ export async function getInsights(daysInput: number): Promise<Insights> {
       rating: t.rating === null ? null : Math.round(num(t.rating) * 10) / 10,
     })),
     attention: {
+      pendingVerifications: num(attention.pending_verifications),
       failedRefunds: num(attention.failed_refunds),
       failedPayouts: num(attention.failed_payouts),
       activeSos: num(attention.active_sos),
@@ -229,7 +232,7 @@ export async function getInsights(daysInput: number): Promise<Insights> {
 export interface SearchResults {
   tickets: { id: string; subject: string; status: string }[];
   errands: { id: string; category: string; status: string; requester: string }[];
-  people: { role: "requester" | "runner"; name: string; phone: string }[];
+  people: { id: string; role: "requester" | "runner"; name: string; phone: string }[];
 }
 
 /** Small cross-table lookup for the top search box (at most 5 of each kind). */
@@ -244,12 +247,12 @@ export async function adminSearch(raw: string): Promise<SearchResults> {
     rows<any>(sql`select e.id, e.category::text category, e.status::text status, r.full_name requester
       from errands e join requesters r on r.id = e.requester_id
       where e.id::text ilike ${idLike} or r.full_name ilike ${like} order by e.created_at desc limit 5`),
-    rows<any>(sql`(select 'requester' role, full_name name, phone from requesters where full_name ilike ${like} or phone ilike ${like} limit 5)
-      union all (select 'runner' role, full_name name, phone from runners where full_name ilike ${like} or phone ilike ${like} limit 5)`),
+    rows<any>(sql`(select id, 'requester' role, full_name name, phone from requesters where full_name ilike ${like} or phone ilike ${like} limit 5)
+      union all (select id, 'runner' role, full_name name, phone from runners where full_name ilike ${like} or phone ilike ${like} limit 5)`),
   ]);
   return {
     tickets: tickets.map((t) => ({ id: t.id, subject: t.subject, status: t.status })),
     errands: errs.map((e) => ({ id: e.id, category: e.category, status: e.status, requester: e.requester })),
-    people: people.slice(0, 8).map((p) => ({ role: p.role, name: p.name, phone: p.phone })),
+    people: people.slice(0, 8).map((p) => ({ id: p.id, role: p.role, name: p.name, phone: p.phone })),
   };
 }
