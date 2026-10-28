@@ -21,6 +21,17 @@ import {
   staffResolveSos,
 } from "../lib/safety-admin";
 import { approve, getReview, listReviews, reject, rejectSchema, reviewCounts } from "../lib/identity-review";
+import {
+  getErrandDetail,
+  getPerson,
+  listPeople,
+  setSuspended,
+  staffCancelErrand,
+  staffCancelSchema,
+  staffUnassignRunner,
+  staffUnassignSchema,
+  suspendSchema,
+} from "../lib/people-admin";
 import { findPaidTransaction, issueRefund, retryRefund } from "../lib/refunds";
 import { SUPPORT_STATUSES, adminGet, adminList, adminReply, adminSetStatus, replySchema } from "../lib/support";
 
@@ -230,6 +241,72 @@ router.post(
   asyncHandler(async (req, res) => {
     const { runnerId } = z.object({ runnerId: z.uuid() }).parse(req.body);
     res.status(201).json({ payout: await adminRetryPayout(runnerId) });
+  })
+);
+
+// People: search, profile, suspend / reinstate.
+router.get(
+  "/api/people",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const q = req.query;
+    res.json(
+      await listPeople({
+        role: typeof q.role === "string" ? q.role : undefined,
+        q: typeof q.q === "string" ? q.q : undefined,
+        suspended: q.suspended === "1",
+      })
+    );
+  })
+);
+
+router.get(
+  "/api/people/:role/:id",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await getPerson(String(req.params.role), z.uuid("Not a valid id").parse(req.params.id)));
+  })
+);
+
+router.post(
+  "/api/people/:role/:id/suspend",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { reason } = suspendSchema.parse(req.body);
+    res.json(await setSuspended(String(req.params.role), z.uuid().parse(req.params.id), reason));
+  })
+);
+
+router.post(
+  "/api/people/:role/:id/reinstate",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await setSuspended(String(req.params.role), z.uuid().parse(req.params.id), null));
+  })
+);
+
+// One errand in full, and the two things staff can do to a stuck one.
+router.get(
+  "/api/errands/:id",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await getErrandDetail(z.uuid("Not a valid errand id").parse(req.params.id)));
+  })
+);
+
+router.post(
+  "/api/errands/:id/cancel",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await staffCancelErrand(z.uuid().parse(req.params.id), staffCancelSchema.parse(req.body)));
+  })
+);
+
+router.post(
+  "/api/errands/:id/unassign",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await staffUnassignRunner(z.uuid().parse(req.params.id), staffUnassignSchema.parse(req.body)));
   })
 );
 
