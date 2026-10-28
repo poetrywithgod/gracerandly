@@ -40,7 +40,10 @@ export interface CancelOutcome {
   feeNaira: number;
 }
 
-export async function cancelErrandByRequester(existing: ErrandRow): Promise<CancelOutcome> {
+export async function cancelErrandByRequester(
+  existing: ErrandRow,
+  opts: { waiveFee?: boolean } = {}
+): Promise<CancelOutcome> {
   if (existing.status === "delivered" || existing.status === "cancelled") {
     throw AppErrors.conflict(`This errand is already ${existing.status}`);
   }
@@ -60,6 +63,8 @@ export async function cancelErrandByRequester(existing: ErrandRow): Promise<Canc
   if (!row) throw AppErrors.conflict("This errand just changed — refresh and try again");
 
   const hadRunner = existing.status !== "pending_match" && !!existing.runnerId;
+  // Staff can cancel without the runner's fee (when it wasn't the requester's fault).
+  const chargeFee = hadRunner && !opts.waiveFee;
   let refundedNaira = 0;
   let feeNaira = 0;
 
@@ -78,7 +83,7 @@ export async function cancelErrandByRequester(existing: ErrandRow): Promise<Canc
     if (tx.status !== "escrowed") continue;
 
     const charged = amountCharged(tx);
-    if (hadRunner) {
+    if (chargeFee) {
       const fee = Math.min(cancellationFeeNaira(), charged);
       const [claimed] = await db
         .update(escrowTransactions)
@@ -97,7 +102,7 @@ export async function cancelErrandByRequester(existing: ErrandRow): Promise<Canc
         .returning({ id: escrowTransactions.id });
       if (!claimed) continue;
       refundedNaira += charged;
-      await issueRefund({ tx, amount: charged, reason: "cancelled", note: "Cancelled before a runner accepted" });
+      await issueRefund({ tx, amount: charged, reason: "cancelled", note: hadRunner ? "Cancelled by staff, no fee charged" : "Cancelled before a runner accepted" });
     }
     await restoreCredit(tx.id);
   }

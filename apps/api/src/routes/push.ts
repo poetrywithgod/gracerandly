@@ -2,7 +2,8 @@ import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { verifyAuthToken } from "../lib/jwt";
-import { AppErrors } from "../lib/errors";
+import { assertNotSuspended } from "../lib/suspension";
+import { AppError, AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { isExpoPushToken, registerPushToken, unregisterPushToken } from "../lib/push";
 
@@ -19,7 +20,7 @@ declare global {
   }
 }
 
-function requireAnyAuth(req: Request, _res: Response, next: NextFunction) {
+async function requireAnyAuth(req: Request, _res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
   if (!token) {
@@ -28,10 +29,11 @@ function requireAnyAuth(req: Request, _res: Response, next: NextFunction) {
   }
   try {
     const payload = verifyAuthToken(token);
+    await assertNotSuspended(payload.role, payload.sub);
     req.pushAuth = { role: payload.role, userId: payload.sub };
     next();
-  } catch {
-    next(AppErrors.unauthorized("Invalid or expired token"));
+  } catch (err) {
+    next(err instanceof AppError ? err : AppErrors.unauthorized("Invalid or expired token"));
   }
 }
 

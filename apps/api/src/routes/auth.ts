@@ -12,6 +12,7 @@ import {
   confirmVerificationSchema,
 } from "../schemas/auth";
 import { signAuthToken } from "../lib/jwt";
+import { assertRowNotSuspended } from "../lib/suspension";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
@@ -130,6 +131,7 @@ router.post(
       throw AppErrors.unauthorized("Incorrect phone number or password");
     }
 
+    assertRowNotSuspended(row);
     const token = signAuthToken({ sub: row.id, role: "requester" });
     res.json({ token, user: toRequester(row) });
   })

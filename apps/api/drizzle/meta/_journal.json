@@ -155,6 +155,13 @@
       "when": 1793173498001,
       "tag": "0021_safety_review",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793229981051,
+      "tag": "0022_account_suspension",
+      "breakpoints": true
     }
   ]
 }

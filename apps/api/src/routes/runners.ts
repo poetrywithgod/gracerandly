@@ -23,6 +23,7 @@ import { sharePositionSchema } from "../schemas/location";
 import { submitReviewSchema } from "../schemas/review";
 import { getReviewState, listReviewsAbout, ratingSummaryFor, submitReview } from "../lib/reviews";
 import { signAuthToken } from "../lib/jwt";
+import { assertRowNotSuspended } from "../lib/suspension";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireRunnerAuth } from "../middleware/requireAuth";
@@ -264,6 +265,7 @@ router.post(
     const passwordMatches = await bcrypt.compare(input.password, row.passwordHash);
     if (!passwordMatches) throw AppErrors.unauthorized("Incorrect phone number or password");
 
+    assertRowNotSuspended(row);
     const token = signAuthToken({ sub: row.id, role: "runner" });
     res.json({ token, user: toRunner(row) });
   })

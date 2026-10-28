@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { verifyAuthToken } from "../lib/jwt";
-import { AppErrors } from "../lib/errors";
+import { AppError, AppErrors } from "../lib/errors";
+import { assertNotSuspended } from "../lib/suspension";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -18,7 +19,7 @@ function readBearerToken(req: Request): string | undefined {
 }
 
 /** Gates requester-only routes. Sets req.requesterId; rejects runner tokens. */
-export function requireAuth(req: Request, _res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const token = readBearerToken(req);
   if (!token) {
     next(AppErrors.unauthorized("Missing or malformed Authorization header"));
@@ -31,15 +32,16 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
       next(AppErrors.unauthorized("This endpoint is for requester accounts"));
       return;
     }
+    await assertNotSuspended("requester", payload.sub);
     req.requesterId = payload.sub;
     next();
-  } catch {
-    next(AppErrors.unauthorized("Invalid or expired token"));
+  } catch (err) {
+    next(err instanceof AppError ? err : AppErrors.unauthorized("Invalid or expired token"));
   }
 }
 
 /** Gates runner-only routes. Sets req.runnerId; rejects requester tokens. */
-export function requireRunnerAuth(req: Request, _res: Response, next: NextFunction) {
+export async function requireRunnerAuth(req: Request, _res: Response, next: NextFunction) {
   const token = readBearerToken(req);
   if (!token) {
     next(AppErrors.unauthorized("Missing or malformed Authorization header"));
@@ -52,9 +54,10 @@ export function requireRunnerAuth(req: Request, _res: Response, next: NextFuncti
       next(AppErrors.unauthorized("This endpoint is for runner accounts"));
       return;
     }
+    await assertNotSuspended("runner", payload.sub);
     req.runnerId = payload.sub;
     next();
-  } catch {
-    next(AppErrors.unauthorized("Invalid or expired token"));
+  } catch (err) {
+    next(err instanceof AppError ? err : AppErrors.unauthorized("Invalid or expired token"));
   }
 }

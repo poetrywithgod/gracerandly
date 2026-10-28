@@ -95,6 +95,7 @@ import { z } from "zod";
 import { db } from "../db/client";
 import { chatMessages, errands, requesters, runners } from "../db/schema";
 import { verifyAuthToken } from "./jwt";
+import { isSuspended } from "./suspension";
 import { sendPushToUser } from "./push";
 
 const CHAT_ALLOWED_STATUSES = new Set(["accepted", "en_route_to_pickup", "in_progress", "en_route_to_delivery", "delivered"]);
@@ -376,6 +377,7 @@ async function authenticateConnection(req: IncomingMessage): Promise<Connection 
   } catch {
     return { error: "Invalid or expired token" };
   }
+  if (await isSuspended(payload.role, payload.sub)) return { error: "This account is suspended" };
 
   const [errand] = await db.select().from(errands).where(eq(errands.id, errandId)).limit(1);
   if (!errand) return { error: "Errand not found" };

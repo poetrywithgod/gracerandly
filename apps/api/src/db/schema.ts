@@ -43,6 +43,10 @@ export const requesters = pgTable("requesters", {
   // this approach can tolerate.
   avatarUrl: text("avatar_url"),
   bio: text("bio"),
+  // Staff suspension (admin dashboard, People). A suspended account can't log
+  // in or use the API (lib/suspension.ts); the reason is shown to the person.
+  suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+  suspendedReason: text("suspended_reason"),
   status: requesterStatusEnum("status").notNull().default("available"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -130,6 +134,10 @@ export const runners = pgTable("runners", {
   paystackRecipientCode: text("paystack_recipient_code"),
   trustTierLevel: trustTierLevelEnum("trust_tier_level").notNull().default("probationary"),
   isOnline: boolean("is_online").notNull().default(false),
+  // Staff suspension (admin dashboard, People). A suspended account can't log
+  // in or use the API (lib/suspension.ts); the reason is shown to the person.
+  suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+  suspendedReason: text("suspended_reason"),
   currentLocation: jsonb("current_location").$type<RunnerLocation>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
