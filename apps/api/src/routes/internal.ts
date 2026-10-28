@@ -2,6 +2,7 @@ import { Router } from "express";
 import { timingSafeEqual } from "node:crypto";
 import { asyncHandler } from "../lib/asyncHandler";
 import { runDueRecurring } from "../lib/recurring";
+import { expireStaleErrands } from "../lib/expiry";
 
 // Endpoints for outside schedulers (not for the apps). Disabled unless
 // CRON_SECRET is set.
@@ -33,7 +34,8 @@ router.get(
       return;
     }
     const posted = await runDueRecurring();
-    res.json({ ok: true, posted });
+    const expired = await expireStaleErrands();
+    res.json({ ok: true, posted, expired });
   })
 );
 

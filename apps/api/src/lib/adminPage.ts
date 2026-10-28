@@ -95,7 +95,7 @@ select.btn{appearance:none;padding-right:34px;background:transparent url("data:i
 .stat.hero .go{background:#fff;border-color:#fff;color:var(--deep)}
 .stat.hero .delta{color:rgba(255,255,255,.85)}
 .stat.hero .delta .up,.stat.hero .delta .dn,.stat.hero .delta .flat{background:rgba(255,255,255,.18);color:#fff}
-.wk{display:flex;gap:10px;align-items:flex-end;height:176px;margin-top:8px}
+.wk{display:flex;gap:10px;align-items:flex-end;height:176px;margin-top:34px}
 .wk .col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px;height:100%;min-width:0}
 .wk .pill{width:100%;max-width:46px;border-radius:99px;position:relative;transform-origin:bottom;animation:rise .7s cubic-bezier(.2,.8,.2,1) both}
 .wk .pill.t1{background:linear-gradient(180deg,#6b3b70,var(--deep))}
@@ -368,12 +368,22 @@ function heatmap(cells){
   return '<svg class="chart hm" viewBox="0 0 '+W+" "+H+'" role="img" aria-label="Errands posted by weekday and hour">'+out+'</svg>';
 }
 function pctChange(cur,prev){if(!prev)return cur?null:0;return (cur-prev)/prev}
-function deltaHtml(cur,prev,goodUp,label){
+function deltaHtml(cur,prev,goodUp,label,fmt){
+  // Tiny numbers make percentages jump around (1 -> 2 is "+100%"), so for
+  // small counts (or money that was zero before) say what actually changed.
+  var small=(fmt?prev===0:prev<10)||(prev>0&&cur/prev>6);
+  if(small){
+    var diff=cur-prev,f=fmt||I;
+    if(diff===0)return '<i class="flat">0</i><span>same as '+label+'</span>';
+    if(fmt&&prev===0)return '<span>New this period</span>';
+    var up=diff>0,good=goodUp?up:!up;
+    return '<i class="'+(good?"up":"dn")+'">'+(up?"\u25B2 +":"\u25BC \u2212")+f(Math.abs(diff))+'</i><span>vs '+label+'</span>';
+  }
   var p=pctChange(cur,prev);
   if(p===null)return '<span>New this period</span>';
   if(Math.abs(p)<0.005)return '<i class="flat">0%</i><span>same as '+label+'</span>';
-  var up=p>0,good=goodUp?up:!up;
-  return '<i class="'+(good?"up":"dn")+'">'+(up?"▲":"▼")+" "+(Math.abs(p)>5?">500":Math.round(Math.abs(p)*100))+'%</i><span>'+(up?"up":"down")+' from '+label+'</span>';
+  var up2=p>0,good2=goodUp?up2:!up2;
+  return '<i class="'+(good2?"up":"dn")+'">'+(up2?"\u25B2":"\u25BC")+" "+(Math.abs(p)>5?">500":Math.round(Math.abs(p)*100))+'%</i><span>'+(up2?"up":"down")+' from '+label+'</span>';
 }
 
 /* ---------- data ---------- */
@@ -502,7 +512,7 @@ function dashboardPage(force){
     '<div class="grid">'+
       '<div class="c3">'+statCard({hero:true,label:"Errands posted",value:I(e.posted),delta:deltaHtml(e.posted,i.previous.posted,true,prevLabel)})+'</div>'+
       '<div class="c3">'+statCard({label:"Errands delivered",value:I(e.delivered),delta:deltaHtml(e.delivered,i.previous.delivered,true,prevLabel)})+'</div>'+
-      '<div class="c3">'+statCard({label:"Paid in",value:Nc(m.paidIn),delta:deltaHtml(m.paidIn,i.previous.paidIn,true,prevLabel)})+'</div>'+
+      '<div class="c3">'+statCard({label:"Paid in",value:Nc(m.paidIn),delta:deltaHtml(m.paidIn,i.previous.paidIn,true,prevLabel,Nc)})+'</div>'+
       '<div class="c3">'+statCard({label:"New people",value:I(a.users.newRequesters+a.users.newRunners),delta:deltaHtml(a.users.newRequesters+a.users.newRunners,i.previous.newUsers,true,prevLabel)})+'</div>'+
       '<section class="card c5"><div class="cardh"><h3>Busiest days</h3></div><p class="sub">Errands posted per weekday, last '+d.days+' days</p>'+weekdayPills(i.weekday)+'</section>'+
       '<div class="c3">'+attHtml+'</div><div class="c4">'+latest+'</div>'+
@@ -547,10 +557,10 @@ function analyticsPage(force){
     c.setAttribute("data-page","analytics");
     c.innerHTML=head("Analytics","Charts for every part of the system: errands, money, people, support and safety.",periodSelect()+'<button class="btn" id="csv2">'+icon("down")+'Export CSV</button>')+
     '<div class="grid">'+
-      '<div class="c3">'+miniStat("Paid in",N(m.paidIn),deltaHtml(m.paidIn,i.previous.paidIn,true,prev),paid,"var(--s1)")+'</div>'+
-      '<div class="c3">'+miniStat("Commission earned",N(m.commission),deltaHtml(m.commission,i.previous.commission,true,prev),comm,"var(--s1)")+'</div>'+
+      '<div class="c3">'+miniStat("Paid in",N(m.paidIn),deltaHtml(m.paidIn,i.previous.paidIn,true,prev,Nc),paid,"var(--s1)")+'</div>'+
+      '<div class="c3">'+miniStat("Commission earned",N(m.commission),deltaHtml(m.commission,i.previous.commission,true,prev,Nc),comm,"var(--s1)")+'</div>'+
       '<div class="c3">'+miniStat("Average delivery fee",m.avgFee===null?"—":N(m.avgFee),'<span>Across paid errands</span>',null)+'</div>'+
-      '<div class="c3">'+miniStat("Completion rate",e.completionRate===null?"—":Math.round(e.completionRate*100)+"%",deltaHtml(e.cancelled,i.previous.cancelled,false,prev).replace(/(up|down) from .*$/,function(m,w){return "cancellations "+w}),null)+'</div>'+
+      '<div class="c3">'+miniStat("Completion rate",e.completionRate===null?"—":Math.round(e.completionRate*100)+"%",deltaHtml(e.cancelled,i.previous.cancelled,false,prev).replace("<span>up from","<span>cancellations up from").replace("<span>down from","<span>cancellations down from").replace("<span>vs ","<span>cancelled vs "),null)+'</div>'+
       '<section class="card c8"><h3>Errands per day</h3><p class="sub">Posted, delivered and cancelled, last '+d.days+' days</p><div class="lgd"><span><i class="sw line" style="background:var(--s1)"></i>Posted</span><span><i class="sw line" style="background:var(--s2)"></i>Delivered</span><span><i class="sw line" style="background:var(--s3)"></i>Cancelled</span></div>'+lineChart("lc-errands",dayList,[{name:"Posted",color:"#9c4a78",vals:posted,area:true},{name:"Delivered",color:"#2f7fb3",vals:deliv},{name:"Cancelled",color:"#cf8410",vals:canc}],{label:"Errands posted, delivered and cancelled per day"})+'</section>'+
       '<section class="card c4"><h3>By category</h3><p class="sub">Errands posted in the period</p><div class="donutw">'+donut(cats,I(catTotal),"errands","Errands by category")+'<div class="legend">'+cats.map(function(x){return '<div><i class="sw" style="background:'+x.color+'"></i>'+esc(x.label)+'<b>'+I(x.val)+'</b></div>'}).join("")+'</div></div></section>'+
       '<section class="card c6"><h3>Money paid in per day</h3><p class="sub">What requesters paid: fee plus items budget, after credit</p>'+barChart(dayList,paid,"#9c4a78",{yfmt:Nc,vfmt:N,label:"Money paid in per day"})+'</section>'+

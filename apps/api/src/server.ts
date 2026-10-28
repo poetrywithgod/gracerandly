@@ -19,6 +19,7 @@ import { errorHandler } from "./middleware/errorHandler";
 import { attachChatServer } from "./lib/chat-server";
 import { expireStaleAlerts } from "./lib/sos";
 import { runDueRecurring } from "./lib/recurring";
+import { expireStaleErrands } from "./lib/expiry";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -96,3 +97,11 @@ const RECURRING_INTERVAL_MS = 60 * 1000;
 const runRecurring = () => runDueRecurring().catch((err) => console.error("[recurring] run failed", err));
 void runRecurring();
 setInterval(runRecurring, RECURRING_INTERVAL_MS).unref();
+
+// Cancel and refund errands no runner accepted within STALE_ERRAND_HOURS
+// (default 24; see lib/expiry.ts). Same caveat as above for a sleeping host:
+// the /internal/recurring/run ping runs this too.
+const EXPIRY_INTERVAL_MS = 10 * 60 * 1000;
+const runExpiry = () => expireStaleErrands().catch((err) => console.error("[expiry] run failed", err));
+void runExpiry();
+setInterval(runExpiry, EXPIRY_INTERVAL_MS).unref();
