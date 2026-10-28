@@ -239,6 +239,8 @@ var IC={
  down:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
  refresh:'<path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/>',
  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>',
+ alert:'<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+ wallet:'<path d="M20 12V8H6a2 2 0 0 1 0-4h12v4"/><path d="M4 6v12a2 2 0 0 0 2 2h14v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/>',
  ok:'<path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"/><path d="M22 4L12 14l-3-3"/>',
  grocery:'<path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
  pharmacy:'<path d="M12 5v14M5 12h14"/>',
@@ -393,9 +395,10 @@ function load(force){
 }
 function attentionItems(i){
   var a=i.attention,out=[];
-  if(a.activeSos)out.push({n:a.activeSos,text:a.activeSos===1?"SOS alert is active":"SOS alerts are active",tone:"red",hint:"The safety team has been texted. Check on the errand.",go:null});
+  if(a.activeSos)out.push({n:a.activeSos,text:a.activeSos===1?"SOS alert is active":"SOS alerts are active",tone:"red",hint:"Call the person now and check where they are.",go:"safety"});
   if(a.failedRefunds)out.push({n:a.failedRefunds,text:a.failedRefunds===1?"refund failed":"refunds failed",tone:"red",hint:"Paystack rejected them. Retry from the Refunds page.",go:"refunds"});
-  if(a.failedPayouts)out.push({n:a.failedPayouts,text:a.failedPayouts===1?"runner payout failed":"runner payouts failed",tone:"red",hint:"Check the runner's bank details in Paystack.",go:null});
+  if(a.failedPayouts)out.push({n:a.failedPayouts,text:a.failedPayouts===1?"runner payout failed":"runner payouts failed",tone:"red",hint:"Retry from the Payouts page once the bank details are fixed.",go:"payouts"});
+  if(a.pendingIncidents)out.push({n:a.pendingIncidents,text:a.pendingIncidents===1?"runner report needs review":"runner reports need review",tone:"amber",hint:"Confirm or dismiss them on the Safety page.",go:"safety"});
   if(a.pendingVerifications)out.push({n:a.pendingVerifications,text:a.pendingVerifications===1?"runner is waiting for identity review":"runners are waiting for identity review",tone:"violet",hint:"They can\u2019t go online until you approve them.",go:"verification"});
   if(a.longWaitingErrands)out.push({n:a.longWaitingErrands,text:a.longWaitingErrands===1?"errand has waited over "+a.longWaitMinutes+" min":"errands have waited over "+a.longWaitMinutes+" min",tone:"amber",hint:"No runner has accepted yet.",go:null});
   if(a.ticketsNeedingReply)out.push({n:a.ticketsNeedingReply,text:a.ticketsNeedingReply===1?"support ticket is open":"support tickets are open",tone:"violet",hint:"Reply or mark them resolved on the Support page.",go:"support"});
@@ -403,7 +406,9 @@ function attentionItems(i){
 }
 function badges(i){
   var a=i.attention;
-  var s=$("#b-support"),r=$("#b-refunds"),v=$("#b-verification"),bell=$("#bell-n");
+  var s=$("#b-support"),r=$("#b-refunds"),v=$("#b-verification"),sf=$("#b-safety"),po=$("#b-payouts"),bell=$("#bell-n");
+  if(sf){var sn=a.activeSos+a.pendingIncidents;sf.textContent=sn;sf.hidden=!sn}
+  if(po){po.textContent=a.failedPayouts;po.hidden=!a.failedPayouts}
   if(v){v.textContent=a.pendingVerifications;v.hidden=!a.pendingVerifications}
   if(s){s.textContent=a.ticketsNeedingReply;s.hidden=!a.ticketsNeedingReply}
   if(r){r.textContent=a.failedRefunds;r.hidden=!a.failedRefunds}
@@ -412,8 +417,8 @@ function badges(i){
 }
 
 /* ---------- shell ---------- */
-var GOLABEL={refunds:"refunds",support:"support",verification:"verification"};
-var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["verification","Verification","shield"],["support","Support","msg"],["refunds","Refunds","undo"]];
+var GOLABEL={refunds:"refunds",support:"support",verification:"verification",safety:"safety",payouts:"payouts"};
+var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["verification","Verification","shield"],["safety","Safety","alert"],["payouts","Payouts","wallet"],["support","Support","msg"],["refunds","Refunds","undo"]];
 function renderLogin(msg){
   $("#app").innerHTML='<div class="login">'+LOGO+'<h1>Gracerandly admin</h1><p>Enter the admin key to continue.</p>'+(msg?'<div class="err">'+esc(msg)+'</div>':'')+'<input id="k" type="password" placeholder="Admin key" autocomplete="current-password" aria-label="Admin key"><button class="btn" id="go">Sign in</button></div>';
   var go=function(){key=$("#k").value.trim();if(!key)return;sessionStorage.setItem("gr_admin_key",key);start()};
@@ -421,7 +426,7 @@ function renderLogin(msg){
 }
 function renderShell(){
   $("#app").innerHTML='<div class="shell"><aside class="side"><div class="brand">'+LOGO+'Gracerandly<small>admin</small></div>'+
-  '<div class="navh">Menu</div><ul class="nav">'+NAV.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
+  '<div class="navh">Menu</div><ul class="nav">'+NAV.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="safety"?'<span class="badge red" id="b-safety" hidden></span>':n[0]==="payouts"?'<span class="badge red" id="b-payouts" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
   '<div class="navh" style="margin-top:22px">General</div><ul class="nav"><li><button id="refresh">'+icon("refresh")+'Refresh data</button></li><li><button id="out">'+icon("out")+'Sign out</button></li></ul>'+
   '<div class="sidecard"><h4>Daily numbers</h4><p>Errands, money and sign-ups for every day, ready for a spreadsheet.</p><button id="csv">'+icon("down")+'Download CSV</button></div></aside>'+
   '<div class="main"><header class="top"><div class="search"><span>'+icon("search")+'</span><input id="q" type="search" placeholder="Search errands, tickets, people" aria-label="Search" autocomplete="off"><span class="kbd">Ctrl K</span><div class="results" id="sr" hidden></div></div>'+
@@ -454,7 +459,7 @@ function wirePeriod(){var s=$("#days");if(s)s.onchange=function(){days=Number(s.
 function route(force){
   $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")===page);if(b.getAttribute("data-page")===page)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});
   var c=$("#content");
-  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="verification")verificationPage();else if(page==="support")supportPage();else refundsPage();
+  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="verification")verificationPage();else if(page==="safety")safetyPage();else if(page==="payouts")payoutsPage();else if(page==="support")supportPage();else refundsPage();
   window.scrollTo(0,0);
 }
 function withData(force,render){
@@ -618,6 +623,58 @@ function verificationOpen(id){
     var sh=$("#show");if(sh)sh.onclick=function(){$("#nin").textContent=x.nin||"—";$("#bvn").textContent=x.bvn||"—";sh.hidden=true};
     var ok=$("#ok");if(ok)ok.onclick=function(){ok.disabled=true;api("/verifications/"+id+"/approve",{method:"POST"}).then(function(){cache=null;verificationPage()}).catch(function(e){ok.disabled=false;fail(e)})};
     var no=$("#no");if(no)no.onclick=function(){var w=$("#why").value.trim();if(w.length<5){fail(new Error("Write a reason of at least 5 characters"));return}no.disabled=true;api("/verifications/"+id+"/reject",{method:"POST",body:JSON.stringify({reason:w})}).then(function(){cache=null;verificationPage()}).catch(function(e){no.disabled=false;fail(e)})};
+  }).catch(fail);
+}
+
+/* ---------- safety (SOS + incidents) ---------- */
+var safetyTab=sessionStorage.getItem("gr_admin_stab")||"sos",incView="pending";
+var INCTYPE={geofence_mismatch:"Wrong location at pickup or drop-off",route_deviation:"Left the expected route",theft_confirmed:"Theft confirmed",dispute_lost:"Lost a dispute",sos_triggered:"SOS was raised",other:"Other"};
+function telLink(p){return p?'<a href="tel:'+esc(p)+'" style="color:var(--deep);font-weight:500">'+esc(p)+'</a>':"—"}
+function safetyPage(){
+  var c=$("#content");c.setAttribute("data-page","safety");
+  c.innerHTML=head("Safety","Respond to SOS alerts and review reports about runners.",'<select class="btn" id="stab" aria-label="Show"><option value="sos">SOS alerts</option><option value="incidents">Runner incidents</option></select>')+'<div id="view">Loading…</div>';
+  var f=$("#stab");f.value=safetyTab;f.onchange=function(){safetyTab=f.value;sessionStorage.setItem("gr_admin_stab",safetyTab);safetyPage()};
+  load(false).then(function(d){badges(d.i)}).catch(function(){});
+  if(safetyTab==="sos")sosList();else incidentList();
+}
+function sosList(){
+  api("/sos").then(function(r){
+    $("#view").innerHTML=(r.alerts.length?r.alerts.map(function(a){
+      var t=a.triggeredBy,o=a.otherParty,live=a.status==="active",maps="https://www.google.com/maps?q="+a.location.lat+","+a.location.lng;
+      return '<section class="card" style="margin-bottom:12px'+(live?";box-shadow:0 0 0 2px var(--bad)":"")+'"><div class="cardh"><h3>'+esc(t.name||"Someone")+' ('+esc(t.role)+') pressed SOS</h3><span class="pillx '+(live?"p-bad":"p-mute")+'">'+(live?"Active":"Closed"+(a.resolvedBy?" by "+(a.resolvedBy==="self"?"the person":a.resolvedBy==="auto"?"the system":"staff"):""))+'</span></div>'+
+      '<p class="sub">'+esc(CATNAME[a.category]||a.category)+" errand · "+esc(STATUS[a.errandStatus]||a.errandStatus)+" · raised "+ago(a.createdAt)+(a.updateCount?" · "+a.updateCount+" location updates":"")+'</p>'+
+      '<div class="kv"><span>Phone</span><b>'+telLink(t.phone)+'</b><span>Other person ('+esc(o.role)+')</span><b>'+(o.name?esc(o.name)+" · ":"")+telLink(o.phone)+'</b><span>Last known location</span><b><a href="'+maps+'" target="_blank" rel="noopener" style="color:var(--deep)">Open in maps</a></b><span>Safety team texted</span><b>'+(a.notifiedCount?a.notifiedCount+(a.notifiedCount===1?" person":" people"):"nobody")+'</b></div>'+
+      (live&&!a.notifiedCount?'<div class="err" style="background:var(--warnbg);color:var(--warn);margin:12px 0 0">Nobody was texted for this alert. Call '+esc(t.name||"them")+' now, and check SOS_ALERT_PHONES and your SMS provider.</div>':'')+
+      (live?'<div class="fld"><button class="btn" data-resolve="'+a.id+'">Mark as handled</button></div>':'')+'</section>'}).join(""):'<div class="card"><div class="clear">'+icon("ok")+'No SOS alerts</div><p class="desc muted">Nothing has been raised yet.</p></div>');
+    $$("[data-resolve]").forEach(function(b){b.onclick=function(){b.disabled=true;api("/sos/"+b.getAttribute("data-resolve")+"/resolve",{method:"POST"}).then(function(){cache=null;safetyPage()}).catch(function(e){b.disabled=false;fail(e)})}});
+  }).catch(fail);
+}
+function incidentList(){
+  var h='<div class="fld"><select class="btn" id="iv" aria-label="Show incidents"><option value="pending">Needs review</option><option value="confirmed">Confirmed</option><option value="dismissed">Dismissed</option></select></div><div id="ilist">Loading…</div>';
+  $("#view").innerHTML=h;var f=$("#iv");f.value=incView;f.onchange=function(){incView=f.value;incidentList()};
+  api("/incidents?view="+incView).then(function(r){
+    $("#ilist").innerHTML=r.incidents.length?r.incidents.map(function(x){
+      return '<section class="card" style="margin-bottom:12px"><div class="cardh"><h3>'+esc(INCTYPE[x.type]||x.type)+'</h3><span class="pillx '+(x.confirmed?"p-bad":x.dismissed?"p-mute":"p-warn")+'">'+(x.confirmed?"Confirmed":x.dismissed?"Dismissed":"Needs review")+'</span></div><p class="sub">'+esc(x.runnerName)+" · "+esc(x.tier)+" runner · reported "+ago(x.createdAt)+(x.errandId?" · errand "+esc(x.errandId.slice(0,8)):"")+'</p><p style="margin:0 0 10px">'+esc(x.description)+'</p>'+
+      (x.confirmed?'<p class="muted" style="font-size:12px;margin:0 0 8px">Counts against this runner’s tier.</p>':'')+
+      '<div class="fld">'+(!x.confirmed?'<button class="btn small" data-ic="'+x.id+'">Confirm</button>':'')+(!x.dismissed?'<button class="btn ghost small" data-id2="'+x.id+'">'+(x.confirmed?"Remove":"Dismiss")+'</button>':'')+'</div></section>'}).join(""):'<div class="card"><div class="clear">'+icon("ok")+'Nothing here</div><p class="desc muted">No incidents in this list.</p></div>';
+    $$("[data-ic]").forEach(function(b){b.onclick=function(){b.disabled=true;api("/incidents/"+b.getAttribute("data-ic")+"/confirm",{method:"POST"}).then(function(){cache=null;safetyPage()}).catch(function(e){b.disabled=false;fail(e)})}});
+    $$("[data-id2]").forEach(function(b){b.onclick=function(){b.disabled=true;api("/incidents/"+b.getAttribute("data-id2")+"/dismiss",{method:"POST"}).then(function(){cache=null;safetyPage()}).catch(function(e){b.disabled=false;fail(e)})}});
+  }).catch(fail);
+}
+
+/* ---------- payouts ---------- */
+var pFilter="";
+function payoutsPage(){
+  var c=$("#content");c.setAttribute("data-page","payouts");
+  c.innerHTML=head("Payouts","Money sent to runners’ bank accounts, and any that failed.",'<select class="btn" id="pf" aria-label="Show payouts"><option value="">All payouts</option><option value="failed">Failed</option><option value="pending">On the way</option><option value="success">Paid</option></select>')+'<div id="view">Loading…</div>';
+  var f=$("#pf");f.value=pFilter;f.onchange=function(){pFilter=f.value;payoutsPage()};
+  load(false).then(function(d){badges(d.i)}).catch(function(){});
+  api("/payouts"+(pFilter?"?status="+pFilter:"")).then(function(r){
+    var s=r.summary;
+    $("#view").innerHTML='<div class="grid" style="margin-bottom:14px"><div class="c3">'+miniStat("Owed to runners",N(s.owedToRunners),'<span>Earned, not yet sent</span>',null)+'</div><div class="c3">'+miniStat("Paid out so far",N(s.paidTotal),'<span>Settled transfers</span>',null)+'</div><div class="c3">'+miniStat("On the way",I(s.pending),'<span>Waiting for Paystack</span>',null)+'</div><div class="c3">'+miniStat("Failed",I(s.failed),'<span>Need a retry</span>',null)+'</div></div>'+
+    '<section class="card"><h3>Payout history</h3><div class="twrap" style="margin-top:10px"><table><thead><tr><th>When</th><th>Runner</th><th class="n">Amount</th><th>Status</th><th>Bank</th><th></th></tr></thead><tbody>'+(r.payouts.length?r.payouts.map(function(p){
+      return '<tr><td>'+new Date(p.createdAt).toLocaleString()+'</td><td>'+esc(p.runnerName)+'<div class="muted" style="font-size:12px">'+esc(p.phone)+'</div></td><td class="n">'+N(p.amount)+'</td><td><span class="pillx '+(p.status==="success"?"p-good":p.status==="failed"?"p-bad":"p-warn")+'">'+(p.status==="success"?"Paid":p.status==="failed"?"Failed":"On the way")+'</span>'+(p.failureReason?'<div class="muted" style="font-size:12px;white-space:normal;max-width:260px">'+esc(p.failureReason)+'</div>':'')+'</td><td>'+(p.bank?esc(p.bank):"—")+(p.bankVerified?"":'<div class="muted" style="font-size:12px">not verified</div>')+'</td><td>'+(p.status==="failed"?'<button class="btn ghost small" data-retry-runner="'+p.runnerId+'">Pay out again</button>':'')+'</td></tr>'}).join(""):'<tr><td colspan="6" class="muted">No payouts yet.</td></tr>')+'</tbody></table></div></section>';
+    $$("[data-retry-runner]").forEach(function(b){b.onclick=function(){b.disabled=true;api("/payouts/retry",{method:"POST",body:JSON.stringify({runnerId:b.getAttribute("data-retry-runner")})}).then(function(){cache=null;payoutsPage()}).catch(function(e){b.disabled=false;fail(e)})}});
   }).catch(fail);
 }
 

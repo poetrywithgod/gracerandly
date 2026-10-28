@@ -542,10 +542,9 @@ export const trustIncidentTypeEnum = pgEnum("trust_incident_type", [
 
 // Mirrors packages/shared-types' TrustIncident. A row only counts against a
 // runner's trust tier once `confirmed` is true (lib/trust.ts) — an
-// unconfirmed one is just a flag waiting for review. There is no admin tool
-// to review them yet, so for now confirmation is done by hand in the
-// database; the admin dashboard will own this later. reviewedByAdminId is
-// plain text until an admin users table exists.
+// unconfirmed one is just a flag waiting for review. Staff confirm or
+// dismiss them from the admin dashboard (lib/safety-admin.ts).
+// reviewedByAdminId is plain text until an admin users table exists.
 export const trustIncidents = pgTable(
   "trust_incidents",
   {
@@ -558,6 +557,10 @@ export const trustIncidents = pgTable(
     description: text("description").notNull(),
     confirmed: boolean("confirmed").notNull().default(false),
     reviewedByAdminId: text("reviewed_by_admin_id"),
+    // Staff reviewed it and decided it was not a real problem (admin dashboard,
+    // Safety page). A dismissed incident never counts against the runner.
+    dismissed: boolean("dismissed").notNull().default(false),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("trust_incidents_runner_idx").on(table.runnerId)]
@@ -658,8 +661,9 @@ export const sosAlerts = pgTable(
       .$onUpdate(() => new Date()),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     // "self" = the person tapped "I'm safe"; "auto" = closed by the server
-    // because it went stale and nobody confirmed they were safe.
-    resolvedBy: text("resolved_by").$type<"self" | "auto">(),
+    // because it went stale and nobody confirmed they were safe; "staff" =
+    // closed from the admin dashboard.
+    resolvedBy: text("resolved_by").$type<"self" | "auto" | "staff">(),
   },
   (table) => [
     uniqueIndex("sos_alerts_one_active_per_person_idx")

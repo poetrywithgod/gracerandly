@@ -9,6 +9,17 @@ import { errands, refunds } from "../db/schema";
 import { dailyCsv, getAnalytics } from "../lib/analytics";
 import { ADMIN_PAGE, ADMIN_PAGE_CSP } from "../lib/adminPage";
 import { adminSearch, getInsights } from "../lib/insights";
+import { adminListPayouts, adminRetryPayout } from "../lib/payouts";
+import {
+  confirmIncident,
+  createIncident,
+  createIncidentSchema,
+  dismissIncident,
+  listIncidents,
+  listSos,
+  safetyCounts,
+  staffResolveSos,
+} from "../lib/safety-admin";
 import { approve, getReview, listReviews, reject, rejectSchema, reviewCounts } from "../lib/identity-review";
 import { findPaidTransaction, issueRefund, retryRefund } from "../lib/refunds";
 import { SUPPORT_STATUSES, adminGet, adminList, adminReply, adminSetStatus, replySchema } from "../lib/support";
@@ -151,6 +162,74 @@ router.post(
   asyncHandler(async (req, res) => {
     const { reason } = rejectSchema.parse(req.body);
     res.json(await reject(z.uuid().parse(req.params.id), reason));
+  })
+);
+
+// Safety page: SOS alerts and trust incidents.
+router.get(
+  "/api/sos",
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
+    res.json({ alerts: await listSos(), counts: await safetyCounts() });
+  })
+);
+
+router.post(
+  "/api/sos/:id/resolve",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await staffResolveSos(z.uuid().parse(req.params.id)));
+  })
+);
+
+router.get(
+  "/api/incidents",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await listIncidents(typeof req.query.view === "string" ? req.query.view : undefined));
+  })
+);
+
+router.post(
+  "/api/incidents",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await createIncident(createIncidentSchema.parse(req.body)));
+  })
+);
+
+router.post(
+  "/api/incidents/:id/confirm",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await confirmIncident(z.uuid().parse(req.params.id)));
+  })
+);
+
+router.post(
+  "/api/incidents/:id/dismiss",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await dismissIncident(z.uuid().parse(req.params.id)));
+  })
+);
+
+// Payouts page: runner payout history, and a retry that pays out what a
+// runner is still owed (for example after Paystack rejected a transfer).
+router.get(
+  "/api/payouts",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await adminListPayouts(typeof req.query.status === "string" ? req.query.status : undefined));
+  })
+);
+
+router.post(
+  "/api/payouts/retry",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { runnerId } = z.object({ runnerId: z.uuid() }).parse(req.body);
+    res.status(201).json({ payout: await adminRetryPayout(runnerId) });
   })
 );
 

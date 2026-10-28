@@ -56,6 +56,7 @@ export interface Insights {
   topRunners: { name: string; tier: string; delivered: number; earned: number; rating: number | null }[];
   attention: {
     pendingVerifications: number;
+    pendingIncidents: number;
     failedRefunds: number;
     failedPayouts: number;
     activeSos: number;
@@ -139,6 +140,7 @@ export async function getInsights(daysInput: number): Promise<Insights> {
         group by r.id, r.full_name, r.trust_tier_level order by 3 desc, 4 desc limit 6`),
       one<any>(sql`select
           (select count(*) from runners where verification_status = 'pending') pending_verifications,
+          (select count(*) from trust_incidents where confirmed = false and dismissed = false) pending_incidents,
           (select count(*) from refunds where status = 'failed') failed_refunds,
           (select count(*) from runner_payouts where status = 'failed') failed_payouts,
           (select count(*) from sos_alerts where status = 'active') active_sos,
@@ -210,6 +212,7 @@ export async function getInsights(daysInput: number): Promise<Insights> {
     })),
     attention: {
       pendingVerifications: num(attention.pending_verifications),
+      pendingIncidents: num(attention.pending_incidents),
       failedRefunds: num(attention.failed_refunds),
       failedPayouts: num(attention.failed_payouts),
       activeSos: num(attention.active_sos),
