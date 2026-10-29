@@ -18,6 +18,8 @@ interface Earnings {
   /** Referral bonus included in availableBalance. */
   referralBonus?: number;
   pendingBalance: number;
+  /** Pay held while a problem report on that errand is reviewed. */
+  heldBalance?: number;
   totalPaidOut: number;
   completedErrandsCount: number;
 }
@@ -141,6 +143,12 @@ export default function EarningsScreen() {
           <View style={styles.pendingRow}>
             <Clock size={14} color="#fff" />
             <Text style={styles.pendingText}>{formatNaira(earnings.pendingBalance)} on active errands — released when you deliver</Text>
+          </View>
+        ) : null}
+        {earnings && (earnings.heldBalance ?? 0) > 0 ? (
+          <View style={styles.pendingRow}>
+            <Clock size={14} color="#fff" />
+            <Text style={styles.pendingText}>{formatNaira(earnings.heldBalance ?? 0)} on hold while a problem report is reviewed</Text>
           </View>
         ) : null}
         {hasAccount ? (

@@ -11,6 +11,7 @@ import LoadingScreen from "../components/LoadingScreen";
 import ErrandPostedModal from "../components/ErrandPostedModal";
 import LiveTrackingMap from "../components/LiveTrackingMap";
 import ReviewCard from "../components/ReviewCard";
+import DisputeCard from "../components/DisputeCard";
 import ConfirmModal from "../components/ConfirmModal";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/apiClient";
@@ -195,6 +196,7 @@ export default function ErrandDetailScreen() {
       ) : null}
 
       {errand.status === "delivered" ? <ReviewCard errandId={errand.id} /> : null}
+      {errand.status === "delivered" ? <DisputeCard errandId={errand.id} /> : null}
 
       {TRACKED_STATUSES.has(errand.status) && errand.deliveryPin ? (
         <View style={styles.pinCard}>
