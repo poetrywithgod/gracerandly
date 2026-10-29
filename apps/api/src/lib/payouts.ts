@@ -18,6 +18,7 @@ import { db } from "../db/client";
 import { escrowTransactions, runnerPayouts, runners } from "../db/schema";
 import { AppErrors } from "./errors";
 import { createTransferRecipient, initiateTransfer } from "./payments";
+import { heldTransactionIds } from "./disputes";
 import { releaseRunnerBonus, reserveRunnerBonus } from "./referrals";
 
 export async function startRunnerPayout(runnerId: string) {
@@ -31,10 +32,14 @@ export async function startRunnerPayout(runnerId: string) {
     throw AppErrors.validation("Your payout account couldn't be verified — check the details and re-save it");
   }
 
-  const releasedRows = await db
-    .select({ id: escrowTransactions.id, runnerPayout: escrowTransactions.runnerPayout })
-    .from(escrowTransactions)
-    .where(and(eq(escrowTransactions.runnerId, runnerId), eq(escrowTransactions.status, "released")));
+  // Pay for errands with an open dispute stays put until staff decide (lib/disputes.ts).
+  const held = await heldTransactionIds(runnerId);
+  const releasedRows = (
+    await db
+      .select({ id: escrowTransactions.id, runnerPayout: escrowTransactions.runnerPayout })
+      .from(escrowTransactions)
+      .where(and(eq(escrowTransactions.runnerId, runnerId), eq(escrowTransactions.status, "released")))
+  ).filter((row) => !held.has(row.id));
 
   // Referral bonuses ride along with the earnings: claim them for this
   // payout up front (so two payout requests can't both take them) and put
@@ -43,7 +48,7 @@ export async function startRunnerPayout(runnerId: string) {
   const bonus = await reserveRunnerBonus(runner.id, payoutId);
   const amount = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0) + bonus;
   if (amount <= 0) {
-    throw AppErrors.validation("Nothing to pay out yet");
+    throw AppErrors.validation(held.size > 0 ? "Your remaining earnings are on hold while a problem report is reviewed" : "Nothing to pay out yet");
   }
 
   let recipientCode = runner.paystackRecipientCode;

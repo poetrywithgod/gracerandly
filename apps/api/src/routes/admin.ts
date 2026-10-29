@@ -32,6 +32,7 @@ import {
   staffUnassignSchema,
   suspendSchema,
 } from "../lib/people-admin";
+import { adminGetDispute, adminListDisputes, resolveDisputeSchema, resolveDispute } from "../lib/disputes";
 import { findPaidTransaction, issueRefund, retryRefund } from "../lib/refunds";
 import { SUPPORT_STATUSES, adminGet, adminList, adminReply, adminSetStatus, replySchema } from "../lib/support";
 
@@ -307,6 +308,31 @@ router.post(
   requireAdmin,
   asyncHandler(async (req, res) => {
     res.json(await staffUnassignRunner(z.uuid().parse(req.params.id), staffUnassignSchema.parse(req.body)));
+  })
+);
+
+// Disputes: problems requesters report on delivered errands.
+router.get(
+  "/api/disputes",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await adminListDisputes(typeof req.query.status === "string" ? req.query.status : undefined));
+  })
+);
+
+router.get(
+  "/api/disputes/:id",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await adminGetDispute(z.uuid().parse(req.params.id)));
+  })
+);
+
+router.post(
+  "/api/disputes/:id/resolve",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    res.json(await resolveDispute(z.uuid().parse(req.params.id), resolveDisputeSchema.parse(req.body)));
   })
 );
 

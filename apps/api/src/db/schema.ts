@@ -787,3 +787,52 @@ export const refunds = pgTable(
 );
 
 export type RefundRow = typeof refunds.$inferSelect;
+
+// ---------------------------------------------------------------------
+// Disputes (lib/disputes.ts)
+// ---------------------------------------------------------------------
+
+// A requester reporting a problem with a delivered errand. One per errand.
+// While it is open the runner's pay for that errand is held back from payouts.
+export const disputeReasonEnum = pgEnum("dispute_reason", [
+  "item_missing",
+  "wrong_item",
+  "damaged",
+  "not_delivered",
+  "overcharged",
+  "rude_behavior",
+  "other",
+]);
+export const disputeStatusEnum = pgEnum("dispute_status", ["open", "resolved"]);
+export const disputeOutcomeEnum = pgEnum("dispute_outcome", ["refunded", "rejected"]);
+
+export const disputes = pgTable(
+  "disputes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    errandId: uuid("errand_id")
+      .notNull()
+      .references(() => errands.id),
+    requesterId: uuid("requester_id")
+      .notNull()
+      .references(() => requesters.id),
+    runnerId: uuid("runner_id").references(() => runners.id),
+    reason: disputeReasonEnum("reason").notNull(),
+    description: text("description").notNull(),
+    status: disputeStatusEnum("status").notNull().default("open"),
+    outcome: disputeOutcomeEnum("outcome"),
+    // What staff decided, shown to the requester.
+    staffNote: text("staff_note"),
+    refundAmount: integer("refund_amount"),
+    // How much of the refund was taken back out of the runner's pay.
+    runnerDeduction: integer("runner_deduction"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("disputes_one_per_errand_idx").on(table.errandId),
+    index("disputes_status_idx").on(table.status),
+  ]
+);
+
+export type DisputeRow = typeof disputes.$inferSelect;

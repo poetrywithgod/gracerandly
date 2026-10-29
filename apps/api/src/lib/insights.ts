@@ -57,6 +57,7 @@ export interface Insights {
   attention: {
     pendingVerifications: number;
     pendingIncidents: number;
+    openDisputes: number;
     failedRefunds: number;
     failedPayouts: number;
     activeSos: number;
@@ -141,6 +142,7 @@ export async function getInsights(daysInput: number): Promise<Insights> {
       one<any>(sql`select
           (select count(*) from runners where verification_status = 'pending') pending_verifications,
           (select count(*) from trust_incidents where confirmed = false and dismissed = false) pending_incidents,
+          (select count(*) from disputes where status = 'open') open_disputes,
           (select count(*) from refunds where status = 'failed') failed_refunds,
           (select count(*) from runner_payouts where status = 'failed') failed_payouts,
           (select count(*) from sos_alerts where status = 'active') active_sos,
@@ -213,6 +215,7 @@ export async function getInsights(daysInput: number): Promise<Insights> {
     attention: {
       pendingVerifications: num(attention.pending_verifications),
       pendingIncidents: num(attention.pending_incidents),
+      openDisputes: num(attention.open_disputes),
       failedRefunds: num(attention.failed_refunds),
       failedPayouts: num(attention.failed_payouts),
       activeSos: num(attention.active_sos),

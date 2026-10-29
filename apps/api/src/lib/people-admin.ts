@@ -208,7 +208,7 @@ export async function getErrandDetail(id: string) {
     where e.id = ${id}`);
   if (!e) throw AppErrors.notFound("No errand with that id");
 
-  const [payments, refundRows, reviews, sos, tickets, incidents, disb, chat] = await Promise.all([
+  const [payments, refundRows, reviews, sos, tickets, incidents, disb, chat, disputeRows] = await Promise.all([
     rows<any>(sql`select id, status::text status, amount, items_budget, items_spent, credit_applied, commission_amount, runner_payout,
         created_at, released_at from escrow_transactions where errand_id = ${id} order by created_at`),
     rows<any>(sql`select id, amount, reason::text reason, note, status::text status, failure_reason, created_at from refunds where errand_id = ${id} order by created_at`),
@@ -218,6 +218,7 @@ export async function getErrandDetail(id: string) {
     rows<any>(sql`select id, type::text type, confirmed, dismissed, created_at from trust_incidents where errand_id = ${id} order by created_at`),
     rows<any>(sql`select vendor_name, amount, status::text status, created_at from vendor_disbursements where errand_id = ${id} order by created_at`),
     rows<any>(sql`select count(*) n from chat_messages where errand_id = ${id}`),
+    rows<any>(sql`select id, reason::text reason, status::text status, outcome::text outcome, created_at, resolved_at from disputes where errand_id = ${id}`),
   ]);
 
   const status = e.st as string;
@@ -239,6 +240,10 @@ export async function getErrandDetail(id: string) {
   }
   for (const t of tickets) events.push({ at: iso(t.created_at)!, text: `Support ticket: ${t.subject}`, tone: "warn" });
   for (const i of incidents) events.push({ at: iso(i.created_at)!, text: `Runner incident flagged (${i.type})`, tone: "warn" });
+  for (const d of disputeRows) {
+    events.push({ at: iso(d.created_at)!, text: `Requester reported a problem (${String(d.reason).replace(/_/g, " ")})`, tone: "warn" });
+    if (d.resolved_at) events.push({ at: iso(d.resolved_at)!, text: `Problem report ${d.outcome === "refunded" ? "upheld, refund sent" : "rejected"}`, tone: "good" });
+  }
   for (const r of reviews) events.push({ at: iso(r.created_at)!, text: `${r.role === "requester" ? "Requester" : "Runner"} left a ${r.rating}-star review`, tone: "info" });
   // There is no status history table, so the last status change is shown from updated_at.
   if (iso(e.updated_at) !== iso(e.created_at)) {
@@ -290,6 +295,7 @@ export async function getErrandDetail(id: string) {
     reviews: reviews.map((r) => ({ role: r.role, rating: num(r.rating), comment: r.comment ?? null })),
     sos: sos.map((s) => ({ id: s.id, role: s.role, status: s.status, notified: num(s.notified_count), createdAt: iso(s.created_at) })),
     tickets: tickets.map((t) => ({ id: t.id, subject: t.subject, status: t.status })),
+    dispute: disputeRows[0] ? { id: disputeRows[0].id as string, status: disputeRows[0].status as string, reason: disputeRows[0].reason as string } : null,
     chatMessages: num(chat[0]?.n),
     timeline: events,
     actions: { canCancel, canUnassign },

@@ -10,6 +10,7 @@ import { cancelErrandByRequester } from "../lib/cancellation";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
+import { getDisputeState, raiseDispute, raiseDisputeSchema } from "../lib/disputes";
 import { parseErrandFromText } from "../lib/ai";
 import { getAgoraJoinInfo } from "../lib/agora";
 import { notifyNearbyRunners } from "../lib/errand-alerts";
@@ -423,6 +424,25 @@ router.post(
     const { rating, comment } = submitReviewSchema.parse(req.body);
     await submitReview(existing, "requester", req.requesterId!, rating, comment);
     res.status(201).json(await getReviewState(existing, "requester"));
+  })
+);
+
+// Reporting a problem with a delivered errand (lib/disputes.ts).
+router.get(
+  "/:id/dispute",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    res.json(await getDisputeState(existing));
+  })
+);
+
+router.post(
+  "/:id/dispute",
+  asyncHandler(async (req, res) => {
+    const existing = await loadOwnErrand(req.params.id, req.requesterId!);
+    const input = raiseDisputeSchema.parse(req.body);
+    await raiseDispute(existing, req.requesterId!, input);
+    res.status(201).json(await getDisputeState(existing));
   })
 );
 

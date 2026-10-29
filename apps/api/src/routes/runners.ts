@@ -23,6 +23,7 @@ import { sharePositionSchema } from "../schemas/location";
 import { submitReviewSchema } from "../schemas/review";
 import { getReviewState, listReviewsAbout, ratingSummaryFor, submitReview } from "../lib/reviews";
 import { signAuthToken } from "../lib/jwt";
+import { heldTransactionIds } from "../lib/disputes";
 import { assertRowNotSuspended } from "../lib/suspension";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -489,8 +490,9 @@ router.get(
     // aren't available to request again — see POST /me/payout.
     const inFlightIds = new Set(pendingPayouts.flatMap((p) => p.transactionIds));
     const totalEarned = earnedRows.reduce((sum, row) => sum + row.runnerPayout, 0);
+    const heldIds = await heldTransactionIds(req.runnerId!);
     const availableBalance = earnedRows
-      .filter((row) => row.status === "released" && !inFlightIds.has(row.id))
+      .filter((row) => row.status === "released" && !inFlightIds.has(row.id) && !heldIds.has(row.id))
       .reduce((sum, row) => sum + row.runnerPayout, 0);
     const totalPaidOut = successPayouts.reduce((sum, row) => sum + row.amount, 0);
     // Referral bonuses not yet withdrawn are part of what the runner can take out.
@@ -510,6 +512,7 @@ router.get(
       availableBalance: availableBalance + referralBonus,
       referralBonus,
       pendingBalance,
+      heldBalance: earnedRows.filter((row) => heldIds.has(row.id)).reduce((sum, row) => sum + row.runnerPayout, 0),
       totalPaidOut,
       completedErrandsCount: completedRows.length,
     });
