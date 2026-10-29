@@ -25,7 +25,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--rose);outline-offset:2px}
 .shell{display:grid;grid-template-columns:248px minmax(0,1fr);gap:14px;max-width:1520px;margin:18px auto;padding:14px;background:#FFFEFB;border-radius:30px;box-shadow:0 1px 0 #fff inset,0 18px 50px rgba(80,45,85,.10)}
-.side{background:var(--panel);border-radius:22px;padding:22px 0 16px;display:flex;flex-direction:column;position:sticky;top:32px;align-self:start;height:calc(100vh - 64px);min-height:560px}
+.side{background:var(--panel);border-radius:22px;padding:22px 0 16px;display:flex;flex-direction:column;position:sticky;top:32px;align-self:start;height:calc(100vh - 64px);min-height:560px;overflow-y:auto}
 .brand{display:flex;align-items:center;gap:10px;padding:0 22px 22px;font-weight:600;font-size:19px;letter-spacing:-.01em}
 .brand small{font-size:11px;font-weight:500;background:var(--infobg);color:var(--deep);padding:2px 8px;border-radius:99px;margin-left:2px}
 .navh{padding:0 22px;margin:10px 0 8px;font-size:12px;color:var(--faint);font-weight:500}
@@ -39,7 +39,7 @@ button{cursor:pointer}
 .nav svg,.ico{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
 .badge{margin-left:auto;font-size:11px;font-weight:600;background:var(--deep);color:#fff;border-radius:99px;padding:1px 8px;min-width:22px;text-align:center}
 .badge.red{background:var(--bad)}
-.sidecard{margin:auto 14px 0;border-radius:18px;padding:16px;color:#fff;background:radial-gradient(circle at 85% 10%,rgba(246,219,192,.30),transparent 45%),linear-gradient(150deg,#3A1F3F,#502D55 60%,#6b3b70);position:relative;overflow:hidden}
+.sidecard{flex:none;margin:auto 14px 0;border-radius:18px;padding:16px;color:#fff;background:radial-gradient(circle at 85% 10%,rgba(246,219,192,.30),transparent 45%),linear-gradient(150deg,#3A1F3F,#502D55 60%,#6b3b70);position:relative;overflow:hidden}
 .sidecard:after{content:"";position:absolute;inset:auto -30px -40px auto;width:150px;height:150px;border-radius:50%;border:18px solid rgba(255,255,255,.06)}
 .sidecard h4{margin:0 0 2px;font-size:15px;font-weight:600}.sidecard p{margin:0 0 12px;font-size:12px;opacity:.8}
 .sidecard button{width:100%;border:0;border-radius:99px;background:var(--peach);color:var(--deep);font-weight:600;padding:9px 12px;display:flex;align-items:center;justify-content:center;gap:8px;position:relative;z-index:1}
@@ -111,7 +111,7 @@ select.btn{appearance:none;padding-right:34px;background:transparent url("data:i
 .att ul{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:6px}
 .att li{display:flex;gap:8px;align-items:center;font-size:13px}
 .att .btn{width:100%;justify-content:center;padding:13px}
-.tone{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}.tone.red{background:var(--bad)}.tone.amber{background:var(--s3)}.tone.violet{background:var(--rose)}.tone.green{background:var(--s4)}.linkb{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--deep);cursor:pointer;text-decoration:underline}tr.clk{cursor:pointer}tr.clk:hover td{background:var(--panel)}
+.tone{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}.tone.red{background:var(--bad)}.tone.amber{background:var(--s3)}.tone.violet{background:var(--rose)}.tone.green{background:var(--s4)}select.btn.small{min-width:112px;padding-right:28px}.linkb{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--deep);cursor:pointer;text-decoration:underline}tr.clk{cursor:pointer}tr.clk:hover td{background:var(--panel)}
 .clear{display:flex;align-items:center;gap:10px;color:var(--good);font-weight:600;margin-top:10px}
 .list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .list li{display:flex;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line2)}
@@ -240,6 +240,8 @@ var IC={
  refresh:'<path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/>',
  users:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
  scale:'<path d="M12 3v18M5 21h14M7 7h10"/><path d="M7 7l-4 8a4 4 0 0 0 8 0zM17 7l-4 8a4 4 0 0 0 8 0z"/>',
+ user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+ scroll:'<path d="M8 21h10a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H8"/><path d="M8 21a2 2 0 0 1-2-2V8H3v3a2 2 0 0 0 2 2M11 8h6M11 12h6M11 16h4"/>',
  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>',
  alert:'<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
  wallet:'<path d="M20 12V8H6a2 2 0 0 1 0-4h12v4"/><path d="M4 6v12a2 2 0 0 0 2 2h14v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/>',
@@ -253,16 +255,16 @@ var IC={
 var icon=function(n,cls){return '<svg class="'+(cls||"ico")+'" viewBox="0 0 24 24" aria-hidden="true">'+IC[n]+'</svg>'};
 var LOGO='<svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="12" fill="none" stroke="#502D55" stroke-width="4" stroke-dasharray="58 18" stroke-linecap="round" transform="rotate(-60 16 16)"/><circle cx="16" cy="16" r="4.5" fill="#935073"/></svg>';
 
-var key=sessionStorage.getItem("gr_admin_key")||"";
+var token=sessionStorage.getItem("gr_admin_token")||"",me=null;
 var page=sessionStorage.getItem("gr_admin_page")||"dashboard";
 var days=Number(sessionStorage.getItem("gr_admin_days")||30);
 var cache=null, prefillErrand="", supportFilter="";
 
 function api(path,opt){
   opt=opt||{};
-  return fetch("/admin/api"+path,{method:opt.method||"GET",body:opt.body,headers:{"content-type":"application/json","x-admin-key":key}}).then(function(r){
+  return fetch("/admin/api"+path,{method:opt.method||"GET",body:opt.body,headers:{"content-type":"application/json","authorization":"Bearer "+token}}).then(function(r){
     return r.json().catch(function(){return {}}).then(function(j){
-      if(r.status===401){sessionStorage.removeItem("gr_admin_key");key="";renderLogin("Wrong key");throw new Error("auth")}
+      if(r.status===401){sessionStorage.removeItem("gr_admin_token");token="";me=null;renderLogin((j.error&&j.error.message)||"Please sign in");throw new Error("auth")}
       if(!r.ok)throw new Error((j.error&&j.error.message)||j.message||"Something went wrong");
       return j});
   });
@@ -424,20 +426,33 @@ function badges(i){
 var GOLABEL={refunds:"refunds",support:"support",verification:"verification",safety:"safety",payouts:"payouts",disputes:"disputes"};
 var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["people","People","users"],["verification","Verification","shield"],["safety","Safety","alert"],["disputes","Disputes","scale"],["payouts","Payouts","wallet"],["support","Support","msg"],["refunds","Refunds","undo"]];
 function renderLogin(msg){
-  $("#app").innerHTML='<div class="login">'+LOGO+'<h1>Gracerandly admin</h1><p>Enter the admin key to continue.</p>'+(msg?'<div class="err">'+esc(msg)+'</div>':'')+'<input id="k" type="password" placeholder="Admin key" autocomplete="current-password" aria-label="Admin key"><button class="btn" id="go">Sign in</button></div>';
-  var go=function(){key=$("#k").value.trim();if(!key)return;sessionStorage.setItem("gr_admin_key",key);start()};
-  $("#go").onclick=go;$("#k").onkeydown=function(e){if(e.key==="Enter")go()};$("#k").focus();
+  fetch("/admin/api/auth/status").then(function(r){return r.json()}).catch(function(){return {setupNeeded:false}}).then(function(st){
+    var setup=!!st.setupNeeded;
+    $("#app").innerHTML='<div class="login">'+LOGO+'<h1>Gracerandly admin</h1><p>'+(setup?'Set up the first owner account. You\u2019ll need the setup key (ADMIN_API_KEY on the server).':'Sign in with your staff account.')+'</p><div class="err" id="lerr"'+(msg?'':' hidden')+'>'+esc(msg||"")+'</div>'+
+    (setup?'<input id="ln" placeholder="Your full name" aria-label="Full name" autocomplete="name">':'')+'<input id="le" type="email" placeholder="Email" aria-label="Email" autocomplete="username"><input id="lp" type="password" placeholder="'+(setup?"Password (10+ characters, with a number)":"Password")+'" aria-label="Password" autocomplete="'+(setup?"new-password":"current-password")+'">'+(setup?'<input id="lk" type="password" placeholder="Setup key" aria-label="Setup key" autocomplete="off">':'')+'<button class="btn" id="go">'+(setup?"Create owner account":"Sign in")+'</button></div>';
+    var go=function(){
+      var email=$("#le").value.trim(),pw=$("#lp").value;if(!email||!pw)return;
+      var body=setup?{fullName:$("#ln").value,email:email,password:pw,setupKey:$("#lk").value.trim()}:{email:email,password:pw};
+      var btn=$("#go");btn.disabled=true;
+      fetch("/admin/api/auth/"+(setup?"setup":"login"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}})}).then(function(x){
+        if(!x.ok){btn.disabled=false;var e=$("#lerr");e.textContent=(x.j.error&&x.j.error.message)||"Couldn\u2019t sign in";e.hidden=false;return}
+        token=x.j.token;me=x.j.admin;sessionStorage.setItem("gr_admin_token",token);start();
+      }).catch(function(){btn.disabled=false;var e=$("#lerr");e.textContent="Couldn\u2019t reach the server";e.hidden=false});
+    };
+    $("#go").onclick=go;$$(".login input").forEach(function(i){i.onkeydown=function(e){if(e.key==="Enter")go()}});($("#ln")||$("#le")).focus();
+  });
 }
 function renderShell(){
+  var nav=NAV.slice();if(me.role==="owner"){nav.push(["team","Team","users"],["audit","Audit log","scroll"])}
   $("#app").innerHTML='<div class="shell"><aside class="side"><div class="brand">'+LOGO+'Gracerandly<small>admin</small></div>'+
-  '<div class="navh">Menu</div><ul class="nav">'+NAV.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="safety"?'<span class="badge red" id="b-safety" hidden></span>':n[0]==="disputes"?'<span class="badge red" id="b-disputes" hidden></span>':n[0]==="payouts"?'<span class="badge red" id="b-payouts" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
-  '<div class="navh" style="margin-top:22px">General</div><ul class="nav"><li><button id="refresh">'+icon("refresh")+'Refresh data</button></li><li><button id="out">'+icon("out")+'Sign out</button></li></ul>'+
+  '<div class="navh">Menu</div><ul class="nav">'+nav.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="safety"?'<span class="badge red" id="b-safety" hidden></span>':n[0]==="disputes"?'<span class="badge red" id="b-disputes" hidden></span>':n[0]==="payouts"?'<span class="badge red" id="b-payouts" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
+  '<div class="navh" style="margin-top:22px">General</div><ul class="nav"><li><button data-page="account">'+icon("user")+'My account</button></li><li><button id="refresh">'+icon("refresh")+'Refresh data</button></li><li><button id="out">'+icon("out")+'Sign out</button></li></ul>'+
   '<div class="sidecard"><h4>Daily numbers</h4><p>Errands, money and sign-ups for every day, ready for a spreadsheet.</p><button id="csv">'+icon("down")+'Download CSV</button></div></aside>'+
   '<div class="main"><header class="top"><div class="search"><span>'+icon("search")+'</span><input id="q" type="search" placeholder="Search errands, tickets, people" aria-label="Search" autocomplete="off"><span class="kbd">Ctrl K</span><div class="results" id="sr" hidden></div></div>'+
-  '<div class="topr"><button class="circ" id="mailb" aria-label="Open support">'+icon("mail")+'</button><button class="circ" id="bellb" aria-label="Things that need attention">'+icon("bell")+'<span class="dot" id="bell-n" hidden></span></button><div class="me"><div class="avatar" aria-hidden="true">GR</div><div><b>Staff</b><span>Admin key session</span></div></div><div class="pop" id="pop" hidden></div></div></header>'+
+  '<div class="topr"><button class="circ" id="mailb" aria-label="Open support">'+icon("mail")+'</button><button class="circ" id="bellb" aria-label="Things that need attention">'+icon("bell")+'<span class="dot" id="bell-n" hidden></span></button><div class="me"><div class="avatar" aria-hidden="true">'+esc(initials(me.fullName))+'</div><div><b>'+esc(me.fullName)+'</b><span>'+esc(ROLELBL[me.role]||me.role)+'</span></div></div><div class="pop" id="pop" hidden></div></div></header>'+
   '<main class="content" id="content"></main></div></div>';
   $$("[data-page]").forEach(function(b){b.onclick=function(){go(b.getAttribute("data-page"))}});
-  $("#out").onclick=function(){sessionStorage.removeItem("gr_admin_key");key="";cache=null;renderLogin()};
+  $("#out").onclick=function(){sessionStorage.removeItem("gr_admin_token");token="";me=null;cache=null;renderLogin()};
   $("#refresh").onclick=function(){cache=null;route(true)};
   $("#csv").onclick=downloadCsv;
   $("#mailb").onclick=function(){go("support")};
@@ -454,7 +469,7 @@ function togglePop(){
   }).catch(fail);
 }
 function downloadCsv(){
-  fetch("/admin/api/analytics/daily.csv?days="+days,{headers:{"x-admin-key":key}}).then(function(r){return r.blob()}).then(function(b){var a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="gracerandly-daily.csv";a.click()});
+  fetch("/admin/api/analytics/daily.csv?days="+days,{headers:{"authorization":"Bearer "+token}}).then(function(r){return r.blob()}).then(function(b){var a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="gracerandly-daily.csv";a.click()});
 }
 function go(p){page=p;sessionStorage.setItem("gr_admin_page",p);route(false)}
 function head(title,sub,acts){return '<div class="head"><div><h1>'+title+'</h1><p>'+sub+'</p></div><div class="acts">'+(acts||"")+'</div></div><div class="err" id="err" hidden></div>'}
@@ -463,7 +478,7 @@ function wirePeriod(){var s=$("#days");if(s)s.onchange=function(){days=Number(s.
 function route(force){
   $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")===page);if(b.getAttribute("data-page")===page)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});
   var c=$("#content");
-  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="people")peoplePage();else if(page==="verification")verificationPage();else if(page==="safety")safetyPage();else if(page==="disputes")disputesPage();else if(page==="payouts")payoutsPage();else if(page==="support")supportPage();else refundsPage();
+  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="people")peoplePage();else if(page==="team"&&me.role==="owner")teamPage();else if(page==="audit"&&me.role==="owner")auditPage();else if(page==="account")accountPage();else if(page==="verification")verificationPage();else if(page==="safety")safetyPage();else if(page==="disputes")disputesPage();else if(page==="payouts")payoutsPage();else if(page==="support")supportPage();else refundsPage();
   window.scrollTo(0,0);
 }
 function withData(force,render){
@@ -835,6 +850,58 @@ function errandOpen(id){
   }).catch(fail);
 }
 
+/* ---------- team, audit log, my account ---------- */
+var ROLELBL={owner:"Owner",support:"Support",finance:"Finance"};
+var ROLEHELP={owner:"Everything, including the team and the audit log.",support:"People, verification, safety, tickets and errand fixes. Can reject disputes but not send refunds.",finance:"Payouts, refunds and disputes. Can look at everything else but not change it."};
+function teamPage(){
+  page="team";sessionStorage.setItem("gr_admin_page",page);
+  var c=$("#content");c.setAttribute("data-page","team");
+  $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")==="team")});
+  c.innerHTML=head("Team","Everyone who can sign in to this dashboard. Each person has their own login and every change they make is logged.","")+'<div id="view">Loading…</div>';
+  api("/team").then(function(r){
+    var roleOpts=function(sel){return ["owner","support","finance"].map(function(x){return '<option value="'+x+'"'+(x===sel?" selected":"")+'>'+ROLELBL[x]+'</option>'}).join("")};
+    $("#view").innerHTML='<section class="card" style="margin-bottom:14px"><h3>Add a staff member</h3><p class="sub">Give them a password to start with and ask them to change it from My account.</p><div class="fld"><input id="nn" placeholder="Full name" aria-label="Full name"><input id="ne" type="email" placeholder="Email" aria-label="Email"><select class="btn" id="nr" aria-label="Role">'+roleOpts("support")+'</select><input id="np" type="text" placeholder="Starting password (10+ characters, with a number)" aria-label="Starting password" autocomplete="off" style="min-width:260px;flex:1"><button class="btn" id="nadd">Add</button></div><p class="sub" id="nrole" style="margin:6px 0 0"></p></section>'+
+    '<section class="card"><h3>Staff</h3><div class="twrap" style="margin-top:10px"><table><thead><tr><th>Name</th><th>Role</th><th>Last signed in</th><th>Status</th><th></th></tr></thead><tbody>'+r.team.map(function(m){
+      var self=me&&m.id===me.id;
+      return '<tr><td>'+esc(m.fullName)+(self?' <span class="muted">(you)</span>':'')+'<div class="muted" style="font-size:12px">'+esc(m.email)+'</div></td><td>'+(self?esc(ROLELBL[m.role]):'<select class="btn small" data-role-for="'+m.id+'" aria-label="Role for '+esc(m.fullName)+'">'+roleOpts(m.role)+'</select>')+'</td><td>'+(m.lastLoginAt?ago(m.lastLoginAt):"Never")+'</td><td><span class="pillx '+(m.disabled?"p-bad":"p-good")+'">'+(m.disabled?"Disabled":"Active")+'</span></td><td>'+(self?'':'<button class="btn ghost small" data-toggle="'+m.id+'" data-dis="'+(m.disabled?"0":"1")+'">'+(m.disabled?"Enable":"Disable")+'</button> <button class="btn ghost small" data-reset="'+m.id+'" data-name="'+esc(m.fullName)+'">Reset password</button>')+'</td></tr>'}).join("")+'</tbody></table></div></section>';
+    var nr=$("#nr"),help=function(){$("#nrole").textContent=ROLEHELP[nr.value]};nr.onchange=help;help();
+    $("#nadd").onclick=function(){var b=$("#nadd");b.disabled=true;api("/team",{method:"POST",body:JSON.stringify({fullName:$("#nn").value,email:$("#ne").value,role:nr.value,password:$("#np").value})}).then(function(){teamPage()}).catch(function(e){b.disabled=false;fail(e)})};
+    $$("[data-role-for]").forEach(function(s){s.onchange=function(){api("/team/"+s.getAttribute("data-role-for"),{method:"PATCH",body:JSON.stringify({role:s.value})}).then(function(){teamPage()}).catch(function(e){fail(e);teamPage()})}});
+    $$("[data-toggle]").forEach(function(b){b.onclick=function(){var off=b.getAttribute("data-dis")==="1";if(off&&!confirm("Disable this account? They are signed out straight away."))return;b.disabled=true;api("/team/"+b.getAttribute("data-toggle"),{method:"PATCH",body:JSON.stringify({disabled:off})}).then(function(){teamPage()}).catch(function(e){b.disabled=false;fail(e)})}});
+    $$("[data-reset]").forEach(function(b){b.onclick=function(){var pw=prompt("New password for "+b.getAttribute("data-name")+" (10+ characters, letters and a number). They are signed out everywhere.");if(!pw)return;api("/team/"+b.getAttribute("data-reset")+"/password",{method:"POST",body:JSON.stringify({password:pw})}).then(function(){alert("Password changed. Tell them the new password in person or by phone.")}).catch(fail)}});
+  }).catch(fail);
+}
+var auditQ="",auditWho="";
+function auditPage(){
+  page="audit";sessionStorage.setItem("gr_admin_page",page);
+  var c=$("#content");c.setAttribute("data-page","audit");
+  $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")==="audit")});
+  c.innerHTML=head("Audit log","Every sign-in and every change made here, newest first.","")+'<div class="fld" style="margin-bottom:12px"><select class="btn" id="aw" aria-label="Staff member"><option value="">Everyone</option></select><input id="aq" type="search" placeholder="Search actions, for example refund" aria-label="Search actions" style="flex:1;min-width:200px"></div><div id="view">Loading…</div>';
+  api("/team").then(function(r){$("#aw").innerHTML='<option value="">Everyone</option>'+r.team.map(function(m){return '<option value="'+m.id+'">'+esc(m.fullName)+'</option>'}).join("");$("#aw").value=auditWho}).catch(fail);
+  var t=null,run=function(){auditQ=$("#aq").value.trim();auditWho=$("#aw").value;auditList()};
+  $("#aq").value=auditQ;$("#aq").oninput=function(){clearTimeout(t);t=setTimeout(run,250)};$("#aw").onchange=run;
+  auditList();
+}
+function auditList(){
+  api("/audit?q="+encodeURIComponent(auditQ)+(auditWho?"&admin="+auditWho:"")).then(function(r){
+    var v=$("#view");if(!v)return;
+    v.innerHTML='<section class="card"><div class="twrap"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead><tbody>'+(r.entries.length?r.entries.map(function(e){
+      var bad=/Failed/.test(e.action);
+      return '<tr><td style="white-space:nowrap">'+new Date(e.createdAt).toLocaleString()+'</td><td>'+esc(e.adminEmail)+(e.ip?'<div class="muted" style="font-size:12px">'+esc(e.ip)+'</div>':'')+'</td><td>'+(bad?'<span class="pillx p-bad">'+esc(e.action)+'</span>':esc(e.action))+'</td><td class="muted" style="font-size:12px;white-space:normal;max-width:360px;word-break:break-word">'+(e.targetId?esc(e.targetId)+" ":"")+(e.detail?esc(e.detail):"")+'</td></tr>'}).join(""):'<tr><td colspan="4" class="muted">Nothing logged yet.</td></tr>')+'</tbody></table></div></section>';
+  }).catch(fail);
+}
+function accountPage(){
+  page="account";sessionStorage.setItem("gr_admin_page",page);
+  var c=$("#content");c.setAttribute("data-page","account");
+  $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")==="account")});
+  c.innerHTML=head("My account",esc(me.fullName)+" · "+esc(me.email)+" · "+esc(ROLELBL[me.role]),"")+'<section class="card" style="max-width:520px"><h3>Change password</h3><p class="sub">Changing it signs you out of every other device. Use 10 or more characters with letters and a number.</p><div class="fld" style="flex-direction:column;align-items:stretch"><input id="pc" type="password" placeholder="Current password" aria-label="Current password" autocomplete="current-password"><input id="pn" type="password" placeholder="New password" aria-label="New password" autocomplete="new-password"><input id="pn2" type="password" placeholder="New password again" aria-label="New password again" autocomplete="new-password"><div><button class="btn" id="pgo">Change password</button></div></div><p class="sub" id="pok" style="color:var(--good);margin:8px 0 0" hidden>Password changed.</p></section>';
+  $("#pgo").onclick=function(){
+    if($("#pn").value!==$("#pn2").value){fail(new Error("The two new passwords don’t match"));return}
+    var b=$("#pgo");b.disabled=true;
+    api("/auth/password",{method:"POST",body:JSON.stringify({current:$("#pc").value,next:$("#pn").value})}).then(function(r){token=r.token;sessionStorage.setItem("gr_admin_token",token);me=r.admin;b.disabled=false;$("#pc").value=$("#pn").value=$("#pn2").value="";$("#pok").hidden=false;$("#err").hidden=true}).catch(function(e){b.disabled=false;fail(e)});
+  };
+}
+
 /* ---------- support ---------- */
 function supportPage(){
   var c=$("#content");c.setAttribute("data-page","support");
@@ -905,7 +972,12 @@ function wireSearch(){
   };
 }
 
-function start(){if(!key)return renderLogin();renderShell();route(false)}
+function start(){
+  if(!token)return renderLogin();
+  var go=function(){renderShell();route(false)};
+  if(me)return go();
+  api("/auth/me").then(function(r){me=r.admin;go()}).catch(function(){})
+}
 start();
 })();
 `;
