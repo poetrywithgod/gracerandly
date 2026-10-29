@@ -239,6 +239,7 @@ var IC={
  down:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
  refresh:'<path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/>',
  users:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
+ scale:'<path d="M12 3v18M5 21h14M7 7h10"/><path d="M7 7l-4 8a4 4 0 0 0 8 0zM17 7l-4 8a4 4 0 0 0 8 0z"/>',
  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>',
  alert:'<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
  wallet:'<path d="M20 12V8H6a2 2 0 0 1 0-4h12v4"/><path d="M4 6v12a2 2 0 0 0 2 2h14v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/>',
@@ -399,6 +400,7 @@ function attentionItems(i){
   if(a.activeSos)out.push({n:a.activeSos,text:a.activeSos===1?"SOS alert is active":"SOS alerts are active",tone:"red",hint:"Call the person now and check where they are.",go:"safety"});
   if(a.failedRefunds)out.push({n:a.failedRefunds,text:a.failedRefunds===1?"refund failed":"refunds failed",tone:"red",hint:"Paystack rejected them. Retry from the Refunds page.",go:"refunds"});
   if(a.failedPayouts)out.push({n:a.failedPayouts,text:a.failedPayouts===1?"runner payout failed":"runner payouts failed",tone:"red",hint:"Retry from the Payouts page once the bank details are fixed.",go:"payouts"});
+  if(a.openDisputes)out.push({n:a.openDisputes,text:a.openDisputes===1?"dispute needs a decision":"disputes need a decision",tone:"amber",hint:"The runner\u2019s pay is held until you decide.",go:"disputes"});
   if(a.pendingIncidents)out.push({n:a.pendingIncidents,text:a.pendingIncidents===1?"runner report needs review":"runner reports need review",tone:"amber",hint:"Confirm or dismiss them on the Safety page.",go:"safety"});
   if(a.pendingVerifications)out.push({n:a.pendingVerifications,text:a.pendingVerifications===1?"runner is waiting for identity review":"runners are waiting for identity review",tone:"violet",hint:"They can\u2019t go online until you approve them.",go:"verification"});
   if(a.longWaitingErrands)out.push({n:a.longWaitingErrands,text:a.longWaitingErrands===1?"errand has waited over "+a.longWaitMinutes+" min":"errands have waited over "+a.longWaitMinutes+" min",tone:"amber",hint:"No runner has accepted yet.",go:null});
@@ -407,6 +409,7 @@ function attentionItems(i){
 }
 function badges(i){
   var a=i.attention;
+  var dp=$("#b-disputes");if(dp){dp.textContent=a.openDisputes;dp.hidden=!a.openDisputes}
   var s=$("#b-support"),r=$("#b-refunds"),v=$("#b-verification"),sf=$("#b-safety"),po=$("#b-payouts"),bell=$("#bell-n");
   if(sf){var sn=a.activeSos+a.pendingIncidents;sf.textContent=sn;sf.hidden=!sn}
   if(po){po.textContent=a.failedPayouts;po.hidden=!a.failedPayouts}
@@ -418,8 +421,8 @@ function badges(i){
 }
 
 /* ---------- shell ---------- */
-var GOLABEL={refunds:"refunds",support:"support",verification:"verification",safety:"safety",payouts:"payouts"};
-var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["people","People","users"],["verification","Verification","shield"],["safety","Safety","alert"],["payouts","Payouts","wallet"],["support","Support","msg"],["refunds","Refunds","undo"]];
+var GOLABEL={refunds:"refunds",support:"support",verification:"verification",safety:"safety",payouts:"payouts",disputes:"disputes"};
+var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["people","People","users"],["verification","Verification","shield"],["safety","Safety","alert"],["disputes","Disputes","scale"],["payouts","Payouts","wallet"],["support","Support","msg"],["refunds","Refunds","undo"]];
 function renderLogin(msg){
   $("#app").innerHTML='<div class="login">'+LOGO+'<h1>Gracerandly admin</h1><p>Enter the admin key to continue.</p>'+(msg?'<div class="err">'+esc(msg)+'</div>':'')+'<input id="k" type="password" placeholder="Admin key" autocomplete="current-password" aria-label="Admin key"><button class="btn" id="go">Sign in</button></div>';
   var go=function(){key=$("#k").value.trim();if(!key)return;sessionStorage.setItem("gr_admin_key",key);start()};
@@ -427,7 +430,7 @@ function renderLogin(msg){
 }
 function renderShell(){
   $("#app").innerHTML='<div class="shell"><aside class="side"><div class="brand">'+LOGO+'Gracerandly<small>admin</small></div>'+
-  '<div class="navh">Menu</div><ul class="nav">'+NAV.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="safety"?'<span class="badge red" id="b-safety" hidden></span>':n[0]==="payouts"?'<span class="badge red" id="b-payouts" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
+  '<div class="navh">Menu</div><ul class="nav">'+NAV.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="safety"?'<span class="badge red" id="b-safety" hidden></span>':n[0]==="disputes"?'<span class="badge red" id="b-disputes" hidden></span>':n[0]==="payouts"?'<span class="badge red" id="b-payouts" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
   '<div class="navh" style="margin-top:22px">General</div><ul class="nav"><li><button id="refresh">'+icon("refresh")+'Refresh data</button></li><li><button id="out">'+icon("out")+'Sign out</button></li></ul>'+
   '<div class="sidecard"><h4>Daily numbers</h4><p>Errands, money and sign-ups for every day, ready for a spreadsheet.</p><button id="csv">'+icon("down")+'Download CSV</button></div></aside>'+
   '<div class="main"><header class="top"><div class="search"><span>'+icon("search")+'</span><input id="q" type="search" placeholder="Search errands, tickets, people" aria-label="Search" autocomplete="off"><span class="kbd">Ctrl K</span><div class="results" id="sr" hidden></div></div>'+
@@ -460,7 +463,7 @@ function wirePeriod(){var s=$("#days");if(s)s.onchange=function(){days=Number(s.
 function route(force){
   $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")===page);if(b.getAttribute("data-page")===page)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});
   var c=$("#content");
-  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="people")peoplePage();else if(page==="verification")verificationPage();else if(page==="safety")safetyPage();else if(page==="payouts")payoutsPage();else if(page==="support")supportPage();else refundsPage();
+  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="people")peoplePage();else if(page==="verification")verificationPage();else if(page==="safety")safetyPage();else if(page==="disputes")disputesPage();else if(page==="payouts")payoutsPage();else if(page==="support")supportPage();else refundsPage();
   window.scrollTo(0,0);
 }
 function withData(force,render){
@@ -664,6 +667,47 @@ function incidentList(){
   }).catch(fail);
 }
 
+/* ---------- disputes ---------- */
+var dFilter="open";
+var DOUT={refunded:"Refunded",rejected:"Not upheld"};
+function disputesPage(){
+  var c=$("#content");c.setAttribute("data-page","disputes");
+  c.innerHTML=head("Disputes","Problems requesters report on delivered errands. The runner’s pay for each one is held until you decide.",'<select class="btn" id="df" aria-label="Show disputes"><option value="open">Waiting for a decision</option><option value="resolved">Decided</option></select>')+'<div id="view">Loading…</div>';
+  var f=$("#df");f.value=dFilter;f.onchange=function(){dFilter=f.value;disputesPage()};
+  load(false).then(function(d){badges(d.i)}).catch(function(){});
+  api("/disputes?status="+dFilter).then(function(r){
+    $("#view").innerHTML=r.disputes.length?r.disputes.map(function(x){
+      return '<button class="tk" data-id="'+x.id+'"><div class="grow" style="flex:1;min-width:0"><div class="t" style="font-weight:600">'+esc(x.reasonLabel)+' · '+esc(CATNAME[x.category]||x.category)+'</div><div class="m muted" style="font-size:12px">'+esc(x.requester)+(x.runner?" vs "+esc(x.runner):"")+" · reported "+ago(x.createdAt)+'</div></div><span class="pillx '+(x.status==="open"?"p-warn":x.outcome==="refunded"?"p-bad":"p-good")+'">'+(x.status==="open"?"Open":esc(DOUT[x.outcome]||"Decided"))+'</span></button>'}).join(""):'<div class="card"><div class="clear">'+icon("ok")+'Nothing here</div><p class="desc muted">No disputes in this list.</p></div>';
+    $$(".tk").forEach(function(b){b.onclick=function(){disputeOpen(b.getAttribute("data-id"))}});
+  }).catch(fail);
+}
+function disputeOpen(id){
+  page="disputes";sessionStorage.setItem("gr_admin_page",page);
+  api("/disputes/"+id).then(function(r){
+    var d=r.dispute,m=r.money,c=$("#content"),open=d.status==="open";
+    c.setAttribute("data-page","disputes");
+    $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")==="disputes")});
+    var h=head(esc(d.reasonLabel),esc(CATNAME[r.errand.category]||r.errand.category)+" errand · reported "+ago(d.createdAt),'<button class="btn ghost" id="back">Back to list</button><button class="btn ghost" id="oe">Open errand</button>');
+    h+='<div class="grid"><section class="card c6"><h3>What the requester says</h3><p style="margin:8px 0 0;white-space:pre-wrap">'+esc(d.description)+'</p><div class="kv"><span>Requester</span><b>'+esc(r.requester.name)+" · "+telLink(r.requester.phone)+'</b><span>Their other disputes</span><b>'+r.requester.otherDisputes+'</b><span>Runner</span><b>'+(r.runner?esc(r.runner.name)+" · "+telLink(r.runner.phone):"—")+'</b><span>Runner’s other disputes</span><b>'+(r.runner?r.runner.otherDisputes:"—")+'</b></div></section>';
+    h+='<section class="card c6"><h3>Money</h3><div class="kv"><span>Charged to the requester</span><b>'+N(m.charged)+'</b><span>Refunded so far</span><b>'+N(m.refunded)+'</b><span>Can still refund</span><b>'+N(m.refundable)+'</b><span>Runner’s pay for this errand</span><b>'+N(m.runnerPay)+'</b><span>Runner’s pay status</span><b>'+(m.payStatus==="released"?"Held (not paid out)":m.payStatus==="disbursed"?"Already paid out":esc(m.payStatus||"—"))+'</b></div>'+(m.payStatus==="disbursed"?'<p class="sub" style="margin-top:10px">The runner has already been paid, so a refund can’t be taken back from them. Gracerandly absorbs it.</p>':'')+'</section>';
+    if(open){
+      h+='<section class="card c12"><h3>Your decision</h3><p class="sub">The requester and the runner are both told. The requester sees your note.</p><textarea class="in" id="dnote" placeholder="Note to the requester (what you decided and why)" aria-label="Note"></textarea>'+
+      '<div class="fld"><input id="damt" type="number" min="1" max="'+m.refundable+'" placeholder="Refund amount (₦)" aria-label="Refund amount" style="max-width:220px"></div>'+
+      (m.canDeduct?'<label style="display:flex;gap:6px;align-items:center;font-size:13px;margin:6px 0"><input type="checkbox" id="dded"> Take the refund out of the runner’s pay (up to '+N(m.runnerPay)+')</label>':'')+
+      (r.runner?'<label style="display:flex;gap:6px;align-items:center;font-size:13px;margin:6px 0"><input type="checkbox" id="dinc"> Record a confirmed incident against the runner (counts toward their trust tier)</label>':'')+
+      '<div class="fld"><button class="btn" id="dref"'+(m.refundable<=0?" disabled":"")+'>Refund the requester</button><button class="btn ghost" id="drej">Don’t uphold, release the runner’s pay</button></div></section>';
+    }else{
+      h+='<section class="card c12"><h3>Decision</h3><p class="sub">'+(d.outcome==="refunded"?"Refunded "+N(d.refundAmount||0)+(d.runnerDeduction?" ("+N(d.runnerDeduction)+" taken from the runner)":""):"Not upheld")+" · "+new Date(d.resolvedAt).toLocaleString()+'</p><p style="margin:0">'+esc(d.staffNote||"")+'</p></section>';
+    }
+    h+='</div>';c.innerHTML=h;
+    $("#back").onclick=function(){disputesPage()};
+    $("#oe").onclick=function(){backFn=function(){disputeOpen(id)};errandOpen(d.errandId)};
+    var send=function(btn,body,msg){var w=$("#dnote").value.trim();if(w.length<5){fail(new Error("Write a short note for the requester (at least 5 characters)"));return}body.note=w;if(!confirm(msg))return;btn.disabled=true;api("/disputes/"+id+"/resolve",{method:"POST",body:JSON.stringify(body)}).then(function(){cache=null;disputesPage()}).catch(function(e){btn.disabled=false;fail(e)})};
+    var rf=$("#dref");if(rf)rf.onclick=function(){var a=Number($("#damt").value);if(!(a>0)){fail(new Error("Enter the refund amount"));return}var dd=$("#dded"),di=$("#dinc");send(rf,{outcome:"refund",amount:a,deductFromRunner:!!(dd&&dd.checked),recordIncident:!!(di&&di.checked)},"Refund "+N(a)+" to the requester? This can’t be undone.")};
+    var rj=$("#drej");if(rj)rj.onclick=function(){send(rj,{outcome:"reject"},"Close this dispute without a refund and release the runner’s pay?")};
+  }).catch(fail);
+}
+
 /* ---------- payouts ---------- */
 var pFilter="";
 function payoutsPage(){
@@ -769,7 +813,8 @@ function errandOpen(id){
       (r.reviews.length?'<h4 style="margin:0 0 4px">Reviews</h4><ul class="list">'+r.reviews.map(function(x){return '<li><div class="grow"><div class="t">'+(x.role==="requester"?"Requester":"Runner")+' · '+x.rating+' / 5</div>'+(x.comment?'<div class="m muted" style="font-size:12px">'+esc(x.comment)+'</div>':'')+'</div></li>'}).join("")+'</ul>':'')+
       (r.sos.length?'<h4 style="margin:12px 0 4px">SOS alerts</h4><ul class="list">'+r.sos.map(function(x){return '<li><div class="grow"><div class="t">Pressed by the '+esc(x.role)+" · "+ago(x.createdAt)+'</div></div><span class="pillx '+(x.status==="active"?"p-bad":"p-mute")+'">'+(x.status==="active"?"Active":"Closed")+'</span></li>'}).join("")+'</ul>':'')+
       (r.tickets.length?'<h4 style="margin:12px 0 4px">Support tickets</h4><ul class="list">'+r.tickets.map(function(x){return '<li><button class="tk" data-tk2="'+x.id+'" style="width:100%"><div class="grow" style="flex:1;text-align:left"><div class="t" style="font-weight:600">'+esc(x.subject)+'</div></div><span class="pillx p-mute">'+esc(x.status.replace("_"," "))+'</span></button></li>'}).join("")+'</ul>':'')+
-      (!r.reviews.length&&!r.sos.length&&!r.tickets.length?'<p class="muted">No reviews, SOS alerts or tickets.</p>':'')+'</section>';
+      (r.dispute?'<h4 style="margin:12px 0 4px">Dispute</h4><ul class="list"><li><button class="tk" data-dp="'+r.dispute.id+'" style="width:100%"><div class="grow" style="flex:1;text-align:left"><div class="t" style="font-weight:600">'+esc(r.dispute.reason.replace(/_/g," "))+'</div></div><span class="pillx '+(r.dispute.status==="open"?"p-warn":"p-mute")+'">'+(r.dispute.status==="open"?"Open":"Decided")+'</span></button></li></ul>':'')+
+      (!r.reviews.length&&!r.sos.length&&!r.tickets.length&&!r.dispute?'<p class="muted">No reviews, SOS alerts or tickets.</p>':'')+'</section>';
     if(r.actions.canCancel||r.actions.canUnassign){
       h+='<section class="card c12"><h3>Fix a stuck errand</h3><p class="sub">Both people are told. Once the runner has picked up, money has been spent, so use a partial refund instead.</p><textarea class="in" id="areason" placeholder="Reason (the people involved see this)" aria-label="Reason"></textarea>'+
       (r.runner&&r.actions.canCancel?'<label style="display:flex;gap:6px;align-items:center;font-size:13px;margin:6px 0"><input type="checkbox" id="waive"> Don’t charge the runner’s cancellation fee (requester gets everything back)</label>':'')+
@@ -780,6 +825,7 @@ function errandOpen(id){
     $("#back").onclick=function(){(backFn||peoplePage)()};
     $$("[data-pid]",c).forEach(function(b){b.onclick=function(){backFn=here;personOpen(b.getAttribute("data-prole"),b.getAttribute("data-pid"))}});
     $$("[data-tk2]",c).forEach(function(b){b.onclick=function(){ticketOpen(b.getAttribute("data-tk2"))}});
+    $$("[data-dp]",c).forEach(function(b){b.onclick=function(){disputeOpen(b.getAttribute("data-dp"))}});
     var pr=$("#pref");if(pr)pr.onclick=function(){prefillErrand=id;go("refunds")};
     var act=function(btn,path,body,msg){btn.onclick=function(){var w=$("#areason").value.trim();if(w.length<5){fail(new Error("Give a reason of at least 5 characters"));return}
       if(!confirm(msg))return;btn.disabled=true;body.reason=w;if(path==="cancel"){var wv=$("#waive");body.waiveFee=!!(wv&&wv.checked)}
