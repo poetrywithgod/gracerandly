@@ -1,8 +1,29 @@
-import { timingSafeEqual } from "node:crypto";
-import { Router, type NextFunction, type Request, type Response } from "express";
+import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../lib/asyncHandler";
 import { AppError, AppErrors } from "../lib/errors";
+import {
+  adminCount,
+  adminView,
+  auditMutations,
+  changeOwnPassword,
+  changePasswordSchema,
+  clientIp,
+  createStaff,
+  createStaffSchema,
+  listAudit,
+  listTeam,
+  login,
+  loginSchema,
+  passwordSchema,
+  requireRole,
+  requireStaff,
+  resetStaffPassword,
+  setupFirstOwner,
+  setupSchema,
+  updateStaff,
+  updateStaffSchema,
+} from "../lib/admin-auth";
 import { desc, eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { errands, refunds } from "../db/schema";
@@ -41,24 +62,94 @@ import { SUPPORT_STATUSES, adminGet, adminList, adminReply, adminSetStatus, repl
 // lib/adminPage.ts.
 const router: Router = Router();
 
-function keyMatches(given: string, expected: string): boolean {
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
+const supportOnly = requireRole("owner", "support");
+const moneyOnly = requireRole("owner", "finance");
+const ownerOnly = requireRole("owner");
 
-function requireAdmin(req: Request, _res: Response, next: NextFunction) {
-  const expected = process.env.ADMIN_API_KEY?.trim();
-  if (!expected) return next(AppErrors.notFound());
-  const header = req.headers.authorization;
-  const given =
-    (typeof req.headers["x-admin-key"] === "string" ? req.headers["x-admin-key"] : undefined) ??
-    (header?.startsWith("Bearer ") ? header.slice(7) : "");
-  if (!given || !keyMatches(given, expected)) {
-    return next(new AppError(401, "unauthorized", "Wrong admin key"));
-  }
-  next();
-}
+// ---- Sign-in (public) ----
+// The page is on while ADMIN_API_KEY is set. The key only creates the first owner.
+router.get(
+  "/api/auth/status",
+  asyncHandler(async (_req, res) => {
+    res.json({ setupNeeded: (await adminCount()) === 0 });
+  })
+);
+
+router.post(
+  "/api/auth/setup",
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await setupFirstOwner(setupSchema.parse(req.body), clientIp(req)));
+  })
+);
+
+router.post(
+  "/api/auth/login",
+  asyncHandler(async (req, res) => {
+    if (!process.env.ADMIN_API_KEY?.trim()) throw AppErrors.notFound();
+    res.json(await login(loginSchema.parse(req.body), clientIp(req)));
+  })
+);
+
+// Everything below needs a signed-in staff account, and every change is logged.
+router.use("/api", requireStaff, auditMutations);
+
+router.get("/api/auth/me", (req, res) => {
+  res.json({ admin: adminView(req.admin!) });
+});
+
+router.post(
+  "/api/auth/password",
+  asyncHandler(async (req, res) => {
+    res.json(await changeOwnPassword(req.admin!, changePasswordSchema.parse(req.body), clientIp(req)));
+  })
+);
+
+// Team and audit log: owners only.
+router.get(
+  "/api/team",
+  ownerOnly,
+  asyncHandler(async (_req, res) => {
+    res.json({ team: await listTeam() });
+  })
+);
+
+router.post(
+  "/api/team",
+  ownerOnly,
+  asyncHandler(async (req, res) => {
+    res.status(201).json({ member: await createStaff(createStaffSchema.parse(req.body)) });
+  })
+);
+
+router.patch(
+  "/api/team/:id",
+  ownerOnly,
+  asyncHandler(async (req, res) => {
+    res.json({ member: await updateStaff(req.admin!.id, z.uuid().parse(req.params.id), updateStaffSchema.parse(req.body)) });
+  })
+);
+
+router.post(
+  "/api/team/:id/password",
+  ownerOnly,
+  asyncHandler(async (req, res) => {
+    const { password } = z.object({ password: passwordSchema }).parse(req.body);
+    res.json({ member: await resetStaffPassword(z.uuid().parse(req.params.id), password) });
+  })
+);
+
+router.get(
+  "/api/audit",
+  ownerOnly,
+  asyncHandler(async (req, res) => {
+    res.json({
+      entries: await listAudit({
+        adminId: typeof req.query.admin === "string" && req.query.admin ? z.uuid().parse(req.query.admin) : undefined,
+        q: typeof req.query.q === "string" ? req.query.q.slice(0, 60) : undefined,
+      }),
+    });
+  })
+);
 
 // The page itself is just a shell; it holds no data and needs no key to load.
 router.get(["/", "/support"], (_req, res) => {
@@ -72,7 +163,6 @@ router.get(["/", "/support"], (_req, res) => {
 
 router.get(
   "/api/support/tickets",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     res.json({ tickets: await adminList(typeof req.query.status === "string" ? req.query.status : undefined) });
   })
@@ -80,7 +170,6 @@ router.get(
 
 router.get(
   "/api/support/tickets/:id",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     res.json(await adminGet(req.params.id));
   })
@@ -88,7 +177,7 @@ router.get(
 
 router.post(
   "/api/support/tickets/:id/messages",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     const { body } = replySchema.parse(req.body);
     res.status(201).json({ message: await adminReply(req.params.id, body) });
@@ -97,7 +186,7 @@ router.post(
 
 router.patch(
   "/api/support/tickets/:id",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     const { status } = z.object({ status: z.enum(SUPPORT_STATUSES) }).parse(req.body);
     res.json({ ticket: await adminSetStatus(req.params.id, status) });
@@ -106,7 +195,6 @@ router.patch(
 
 router.get(
   "/api/analytics",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     const days = Number(typeof req.query.days === "string" ? req.query.days : 30);
     res.json(await getAnalytics(days));
@@ -117,7 +205,6 @@ router.get(
 // demand, status mixes, ratings, the "needs attention" counts and latest errands.
 router.get(
   "/api/insights",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     const days = Number(typeof req.query.days === "string" ? req.query.days : 30);
     res.json(await getInsights(days));
@@ -126,7 +213,6 @@ router.get(
 
 router.get(
   "/api/search",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     res.json(await adminSearch(typeof req.query.q === "string" ? req.query.q : ""));
   })
@@ -134,7 +220,6 @@ router.get(
 
 router.get(
   "/api/analytics/daily.csv",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     const days = Number(typeof req.query.days === "string" ? req.query.days : 30);
     res.type("text/csv").setHeader("Content-Disposition", 'attachment; filename="gracerandly-daily.csv"');
@@ -145,7 +230,7 @@ router.get(
 // Identity verification review (Verification page).
 router.get(
   "/api/verifications",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     res.json({ runners: await listReviews(status), counts: await reviewCounts() });
@@ -154,7 +239,7 @@ router.get(
 
 router.get(
   "/api/verifications/:id",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     res.json(await getReview(z.uuid().parse(req.params.id)));
   })
@@ -162,7 +247,7 @@ router.get(
 
 router.post(
   "/api/verifications/:id/approve",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     res.json(await approve(z.uuid().parse(req.params.id)));
   })
@@ -170,7 +255,7 @@ router.post(
 
 router.post(
   "/api/verifications/:id/reject",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     const { reason } = rejectSchema.parse(req.body);
     res.json(await reject(z.uuid().parse(req.params.id), reason));
@@ -180,7 +265,6 @@ router.post(
 // Safety page: SOS alerts and trust incidents.
 router.get(
   "/api/sos",
-  requireAdmin,
   asyncHandler(async (_req, res) => {
     res.json({ alerts: await listSos(), counts: await safetyCounts() });
   })
@@ -188,7 +272,7 @@ router.get(
 
 router.post(
   "/api/sos/:id/resolve",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     res.json(await staffResolveSos(z.uuid().parse(req.params.id)));
   })
@@ -196,7 +280,6 @@ router.post(
 
 router.get(
   "/api/incidents",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     res.json(await listIncidents(typeof req.query.view === "string" ? req.query.view : undefined));
   })
@@ -204,25 +287,25 @@ router.get(
 
 router.post(
   "/api/incidents",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
-    res.status(201).json(await createIncident(createIncidentSchema.parse(req.body)));
+    res.status(201).json(await createIncident(createIncidentSchema.parse(req.body), req.admin!.email));
   })
 );
 
 router.post(
   "/api/incidents/:id/confirm",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
-    res.json(await confirmIncident(z.uuid().parse(req.params.id)));
+    res.json(await confirmIncident(z.uuid().parse(req.params.id), req.admin!.email));
   })
 );
 
 router.post(
   "/api/incidents/:id/dismiss",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
-    res.json(await dismissIncident(z.uuid().parse(req.params.id)));
+    res.json(await dismissIncident(z.uuid().parse(req.params.id), req.admin!.email));
   })
 );
 
@@ -230,7 +313,6 @@ router.post(
 // runner is still owed (for example after Paystack rejected a transfer).
 router.get(
   "/api/payouts",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     res.json(await adminListPayouts(typeof req.query.status === "string" ? req.query.status : undefined));
   })
@@ -238,7 +320,7 @@ router.get(
 
 router.post(
   "/api/payouts/retry",
-  requireAdmin,
+  moneyOnly,
   asyncHandler(async (req, res) => {
     const { runnerId } = z.object({ runnerId: z.uuid() }).parse(req.body);
     res.status(201).json({ payout: await adminRetryPayout(runnerId) });
@@ -248,7 +330,6 @@ router.post(
 // People: search, profile, suspend / reinstate.
 router.get(
   "/api/people",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     const q = req.query;
     res.json(
@@ -263,7 +344,6 @@ router.get(
 
 router.get(
   "/api/people/:role/:id",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     res.json(await getPerson(String(req.params.role), z.uuid("Not a valid id").parse(req.params.id)));
   })
@@ -271,7 +351,7 @@ router.get(
 
 router.post(
   "/api/people/:role/:id/suspend",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     const { reason } = suspendSchema.parse(req.body);
     res.json(await setSuspended(String(req.params.role), z.uuid().parse(req.params.id), reason));
@@ -280,7 +360,7 @@ router.post(
 
 router.post(
   "/api/people/:role/:id/reinstate",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     res.json(await setSuspended(String(req.params.role), z.uuid().parse(req.params.id), null));
   })
@@ -289,7 +369,6 @@ router.post(
 // One errand in full, and the two things staff can do to a stuck one.
 router.get(
   "/api/errands/:id",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     res.json(await getErrandDetail(z.uuid("Not a valid errand id").parse(req.params.id)));
   })
@@ -297,7 +376,7 @@ router.get(
 
 router.post(
   "/api/errands/:id/cancel",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     res.json(await staffCancelErrand(z.uuid().parse(req.params.id), staffCancelSchema.parse(req.body)));
   })
@@ -305,7 +384,7 @@ router.post(
 
 router.post(
   "/api/errands/:id/unassign",
-  requireAdmin,
+  supportOnly,
   asyncHandler(async (req, res) => {
     res.json(await staffUnassignRunner(z.uuid().parse(req.params.id), staffUnassignSchema.parse(req.body)));
   })
@@ -314,7 +393,6 @@ router.post(
 // Disputes: problems requesters report on delivered errands.
 router.get(
   "/api/disputes",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     res.json(await adminListDisputes(typeof req.query.status === "string" ? req.query.status : undefined));
   })
@@ -322,7 +400,6 @@ router.get(
 
 router.get(
   "/api/disputes/:id",
-  requireAdmin,
   asyncHandler(async (req, res) => {
     res.json(await adminGetDispute(z.uuid().parse(req.params.id)));
   })
@@ -330,9 +407,13 @@ router.get(
 
 router.post(
   "/api/disputes/:id/resolve",
-  requireAdmin,
   asyncHandler(async (req, res) => {
-    res.json(await resolveDispute(z.uuid().parse(req.params.id), resolveDisputeSchema.parse(req.body)));
+    const input = resolveDisputeSchema.parse(req.body);
+    // Support staff can reject a dispute; sending money back is for owners and finance.
+    if (input.outcome === "refund" && req.admin!.role === "support") {
+      throw new AppError(403, "forbidden", "Your role (support) can't send refunds. Ask an owner or finance.");
+    }
+    res.json(await resolveDispute(z.uuid().parse(req.params.id), input, req.admin!.email));
   })
 );
 
@@ -344,7 +425,6 @@ const adminRefundSchema = z.object({
 
 router.get(
   "/api/refunds",
-  requireAdmin,
   asyncHandler(async (_req, res) => {
     const rows = await db.select().from(refunds).orderBy(desc(refunds.createdAt)).limit(100);
     res.json({
@@ -365,7 +445,7 @@ router.get(
 
 router.post(
   "/api/refunds",
-  requireAdmin,
+  moneyOnly,
   asyncHandler(async (req, res) => {
     const input = adminRefundSchema.parse(req.body);
     const [errand] = await db.select({ id: errands.id }).from(errands).where(eq(errands.id, input.errandId)).limit(1);
@@ -379,7 +459,7 @@ router.post(
 
 router.post(
   "/api/refunds/:id/retry",
-  requireAdmin,
+  moneyOnly,
   asyncHandler(async (req, res) => {
     res.json({ refund: await retryRefund(z.uuid().parse(req.params.id)) });
   })

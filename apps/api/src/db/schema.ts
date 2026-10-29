@@ -836,3 +836,44 @@ export const disputes = pgTable(
 );
 
 export type DisputeRow = typeof disputes.$inferSelect;
+
+// ---------------------------------------------------------------------
+// Staff accounts and audit log (lib/admin-auth.ts)
+// ---------------------------------------------------------------------
+
+// owner: everything, including the team and the audit log.
+// support: people, verification, safety, support tickets, disputes (can reject, can't refund), errand fixes.
+// finance: payouts, refunds and disputes; can look at the rest but not change it.
+export const adminRoleEnum = pgEnum("admin_role", ["owner", "support", "finance"]);
+
+export const adminUsers = pgTable("admin_users", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull().unique(),
+  fullName: text("full_name").notNull(),
+  role: adminRoleEnum("role").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  // Tokens issued before this moment stop working (set on every password change).
+  passwordChangedAt: timestamp("password_changed_at", { withTimezone: true }).notNull().defaultNow(),
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type AdminUserRow = typeof adminUsers.$inferSelect;
+
+// One row per staff action that changed something (and every sign-in).
+// adminEmail is copied in so the row still reads right if the account is removed.
+export const adminAuditLog = pgTable(
+  "admin_audit_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    adminId: uuid("admin_id").references(() => adminUsers.id, { onDelete: "set null" }),
+    adminEmail: text("admin_email").notNull(),
+    action: text("action").notNull(),
+    targetId: text("target_id"),
+    detail: text("detail"),
+    ip: text("ip"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("admin_audit_created_idx").on(table.createdAt)]
+);

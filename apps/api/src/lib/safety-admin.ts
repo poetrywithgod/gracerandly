@@ -127,10 +127,10 @@ export async function listIncidents(view: string | undefined) {
   };
 }
 
-async function review(id: string, patch: { confirmed: boolean; dismissed: boolean }) {
+async function review(id: string, patch: { confirmed: boolean; dismissed: boolean }, by: string) {
   const [row] = await db
     .update(trustIncidents)
-    .set({ ...patch, reviewedByAdminId: "staff", reviewedAt: new Date() })
+    .set({ ...patch, reviewedByAdminId: by, reviewedAt: new Date() })
     .where(eq(trustIncidents.id, id))
     .returning({ runnerId: trustIncidents.runnerId });
   if (!row) throw AppErrors.notFound("No incident with that id");
@@ -139,10 +139,10 @@ async function review(id: string, patch: { confirmed: boolean; dismissed: boolea
   return { id };
 }
 
-export const confirmIncident = (id: string) => review(id, { confirmed: true, dismissed: false });
-export const dismissIncident = (id: string) => review(id, { confirmed: false, dismissed: true });
+export const confirmIncident = (id: string, by = "staff") => review(id, { confirmed: true, dismissed: false }, by);
+export const dismissIncident = (id: string, by = "staff") => review(id, { confirmed: false, dismissed: true }, by);
 
-export async function createIncident(input: z.infer<typeof createIncidentSchema>) {
+export async function createIncident(input: z.infer<typeof createIncidentSchema>, by = "staff") {
   const [runner] = await db.select({ id: runners.id }).from(runners).where(eq(runners.id, input.runnerId)).limit(1);
   if (!runner) throw AppErrors.notFound("No runner with that id");
   const [row] = await db
@@ -153,7 +153,7 @@ export async function createIncident(input: z.infer<typeof createIncidentSchema>
       type: input.type,
       description: input.description,
       confirmed: true,
-      reviewedByAdminId: "staff",
+      reviewedByAdminId: by,
       reviewedAt: new Date(),
     })
     .returning({ id: trustIncidents.id });

@@ -228,7 +228,7 @@ export const resolveDisputeSchema = z.discriminatedUnion("outcome", [
   }),
 ]);
 
-export async function resolveDispute(id: string, input: z.infer<typeof resolveDisputeSchema>) {
+export async function resolveDispute(id: string, input: z.infer<typeof resolveDisputeSchema>, by = "staff") {
   // Claim it first so two staff clicking at once can't both act.
   const [claimed] = await db
     .update(disputes)
@@ -271,7 +271,7 @@ export async function resolveDispute(id: string, input: z.infer<typeof resolveDi
       errandId: claimed.errandId,
       type: "dispute_lost",
       description: `Dispute upheld (${DISPUTE_REASON_LABEL[claimed.reason]}): ${input.note}`.slice(0, 500),
-    });
+    }, by);
   }
 
   void sendPushToUser("requester", claimed.requesterId, {

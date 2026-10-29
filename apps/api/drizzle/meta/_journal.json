@@ -169,6 +169,13 @@
       "when": 1793230993390,
       "tag": "0023_disputes",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793254534362,
+      "tag": "0024_staff_accounts_audit",
+      "breakpoints": true
     }
   ]
 }
