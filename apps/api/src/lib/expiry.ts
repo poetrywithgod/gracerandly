@@ -14,12 +14,12 @@ import { db } from "../db/client";
 import { errands } from "../db/schema";
 import { cancelErrandByRequester } from "./cancellation";
 import { sendPushToUser } from "./push";
+import { getNumberSetting } from "./settings";
 
 const MAX_PER_RUN = 50;
 
 export function staleErrandHours(): number {
-  const raw = Number(process.env.STALE_ERRAND_HOURS);
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 24;
+  return getNumberSetting("STALE_ERRAND_HOURS");
 }
 
 export async function expireStaleErrands(now: Date = new Date()): Promise<number> {

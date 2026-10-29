@@ -4,6 +4,7 @@ import { asyncHandler } from "../lib/asyncHandler";
 import { AppError, AppErrors } from "../lib/errors";
 import {
   adminCount,
+  audit,
   adminView,
   auditMutations,
   changeOwnPassword,
@@ -53,6 +54,9 @@ import {
   staffUnassignSchema,
   suspendSchema,
 } from "../lib/people-admin";
+import { sendTestAlert, alertRecipients } from "../lib/admin-alerts";
+import { EXPORT_ROLES, buildExport, type ExportKind } from "../lib/exports";
+import { listSettings, resetSetting, saveSetting } from "../lib/settings";
 import { adminGetDispute, adminListDisputes, resolveDisputeSchema, resolveDispute } from "../lib/disputes";
 import { findPaidTransaction, issueRefund, retryRefund } from "../lib/refunds";
 import { SUPPORT_STATUSES, adminGet, adminList, adminReply, adminSetStatus, replySchema } from "../lib/support";
@@ -135,6 +139,58 @@ router.post(
   asyncHandler(async (req, res) => {
     const { password } = z.object({ password: passwordSchema }).parse(req.body);
     res.json({ member: await resetStaffPassword(z.uuid().parse(req.params.id), password) });
+  })
+);
+
+// Settings (owners only): commission, fees, referral amounts, alert emails.
+router.get(
+  "/api/settings",
+  ownerOnly,
+  asyncHandler(async (_req, res) => {
+    res.json({ settings: listSettings(), alertRecipients: alertRecipients().length });
+  })
+);
+
+router.put(
+  "/api/settings/:key",
+  ownerOnly,
+  asyncHandler(async (req, res) => {
+    const { value } = z.object({ value: z.union([z.string(), z.number()]) }).parse(req.body);
+    res.json({ setting: await saveSetting(String(req.params.key), value, req.admin!.email) });
+  })
+);
+
+router.delete(
+  "/api/settings/:key",
+  ownerOnly,
+  asyncHandler(async (req, res) => {
+    res.json({ setting: await resetSetting(String(req.params.key)) });
+  })
+);
+
+router.post(
+  "/api/alerts/test",
+  ownerOnly,
+  asyncHandler(async (_req, res) => {
+    const n = await sendTestAlert();
+    if (n === 0) throw AppErrors.validation("No alert emails are set yet. Add some under Settings first.");
+    res.json({ sentTo: n });
+  })
+);
+
+// CSV downloads. Roles are per kind (see lib/exports.ts); each download is logged.
+router.get(
+  "/api/export/:kind",
+  asyncHandler(async (req, res) => {
+    const kind = String(req.params.kind).replace(/\.csv$/, "") as ExportKind;
+    const allowed = EXPORT_ROLES[kind];
+    if (!allowed) throw AppErrors.notFound("Unknown export");
+    if (!allowed.includes(req.admin!.role)) throw new AppError(403, "forbidden", `Your role (${req.admin!.role}) can't download this. Ask an owner.`);
+    const { filename, csv } = await buildExport(kind);
+    await audit(req.admin!, `Downloaded the ${kind} CSV`, { ip: clientIp(req) });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send("\ufeff" + csv);
   })
 );
 

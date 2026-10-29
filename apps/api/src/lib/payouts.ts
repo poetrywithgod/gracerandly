@@ -17,6 +17,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { escrowTransactions, runnerPayouts, runners } from "../db/schema";
 import { AppErrors } from "./errors";
+import { alertStaff } from "./admin-alerts";
 import { createTransferRecipient, initiateTransfer } from "./payments";
 import { heldTransactionIds } from "./disputes";
 import { releaseRunnerBonus, reserveRunnerBonus } from "./referrals";
@@ -94,6 +95,7 @@ export async function startRunnerPayout(runnerId: string) {
       .set({ status: "failed", failureReason: err instanceof Error ? err.message : "Transfer failed" })
       .where(eq(runnerPayouts.id, payoutRow.id));
     await releaseRunnerBonus(payoutId);
+    void alertStaff("payout_failed", "A runner payout failed", `A \u20a6${amount.toLocaleString("en-NG")} payout to ${runner.fullName} could not be started. Check the Payouts page and retry once the problem is fixed.`);
     throw AppErrors.validation("Couldn't start the transfer — try again in a moment");
   }
 

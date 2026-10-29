@@ -25,21 +25,16 @@ import { and, asc, count, eq, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { referralRewards, referrals, requesters, runners } from "../db/schema";
 import { sendPushToUser } from "./push";
+import { getNumberSetting } from "./settings";
 
 export type ReferralRole = "requester" | "runner";
 
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name];
-  const parsed = raw === undefined || raw === "" ? NaN : Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
-}
-
 export function referralConfig() {
   return {
-    referrerReward: envInt("REFERRAL_REFERRER_NAIRA", 500),
-    refereeReward: envInt("REFERRAL_REFEREE_NAIRA", 500),
-    minErrandNaira: envInt("REFERRAL_MIN_ERRAND_NAIRA", 1000),
-    maxRewardedPerReferrer: envInt("REFERRAL_MAX_REWARDED_PER_REFERRER", 20),
+    referrerReward: getNumberSetting("REFERRAL_REFERRER_NAIRA"),
+    refereeReward: getNumberSetting("REFERRAL_REFEREE_NAIRA"),
+    minErrandNaira: getNumberSetting("REFERRAL_MIN_ERRAND_NAIRA"),
+    maxRewardedPerReferrer: getNumberSetting("REFERRAL_MAX_REWARDED_PER_REFERRER"),
   };
 }
 

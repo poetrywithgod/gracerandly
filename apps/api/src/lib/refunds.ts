@@ -17,6 +17,7 @@ import { db } from "../db/client";
 import { escrowTransactions, refunds, vendorDisbursements, type RefundRow } from "../db/schema";
 import { AppErrors } from "./errors";
 import { refundTransaction } from "./payments";
+import { alertStaff } from "./admin-alerts";
 import { sendPushToUser } from "./push";
 
 type Tx = typeof escrowTransactions.$inferSelect;
@@ -50,6 +51,9 @@ async function sendToPaystack(row: RefundRow, reference: string): Promise<Refund
       })
       .where(eq(refunds.id, row.id))
       .returning();
+    if (result.status === "failed") {
+      void alertStaff("refund_failed", "A refund failed", `Paystack reported a ${NAIRA(row.amount)} refund as failed (errand ${row.errandId.slice(0, 8)}). Retry it from the Refunds page.`);
+    }
     if (result.status !== "failed") {
       void sendPushToUser("requester", row.requesterId, {
         title: "Refund on its way",
@@ -63,6 +67,7 @@ async function sendToPaystack(row: RefundRow, reference: string): Promise<Refund
   } catch (err) {
     const message = err instanceof Error ? err.message : "Refund request failed";
     console.error("[refunds] Paystack refund failed", row.id, message);
+    void alertStaff("refund_failed", "A refund failed", `A ${NAIRA(row.amount)} refund could not be sent (errand ${row.errandId.slice(0, 8)}): ${message.slice(0, 160)}. Retry it from the Refunds page.`);
     const [updated] = await db
       .update(refunds)
       .set({ status: "failed", failureReason: message.slice(0, 300), updatedAt: new Date() })

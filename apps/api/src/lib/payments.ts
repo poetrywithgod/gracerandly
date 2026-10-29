@@ -11,6 +11,7 @@
 // boundary — see amountToKobo/koboToAmount.
 
 import { createHmac } from "node:crypto";
+import { getNumberSetting } from "./settings";
 
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
 
@@ -340,24 +341,15 @@ export async function refundTransaction(params: { reference: string; amountNaira
 // 2.5 for 2.5%). The rate is stored on every payment when it's made
 // (escrow_transactions.commission_amount), so changing it only affects
 // errands paid for afterwards — nothing already paid is recalculated.
-const DEFAULT_COMMISSION_PERCENT = 5;
 
-function readCommissionRate(): number {
-  const raw = process.env.PLATFORM_COMMISSION_PERCENT?.trim();
-  if (!raw) return DEFAULT_COMMISSION_PERCENT / 100;
-  const percent = Number(raw);
-  // Anything that isn't a sensible percentage falls back to the default
-  // rather than silently charging 0% or 100%.
-  if (!Number.isFinite(percent) || percent < 0 || percent > 50) {
-    console.warn(`[payments] ignoring invalid PLATFORM_COMMISSION_PERCENT "${raw}" — using ${DEFAULT_COMMISSION_PERCENT}%`);
-    return DEFAULT_COMMISSION_PERCENT / 100;
-  }
-  return percent / 100;
+// The percentage now comes from lib/settings.ts (saved in the admin dashboard,
+// else the env var, else 5%); anything outside 0-50% falls back to the default
+// rather than silently charging 0% or 100%.
+export function commissionRate(): number {
+  return getNumberSetting("PLATFORM_COMMISSION_PERCENT") / 100;
 }
 
-export const PLATFORM_COMMISSION_RATE = readCommissionRate();
-
 export function splitCommission(amountNaira: number): { commissionAmount: number; runnerPayout: number } {
-  const commissionAmount = Math.round(amountNaira * PLATFORM_COMMISSION_RATE);
+  const commissionAmount = Math.round(amountNaira * commissionRate());
   return { commissionAmount, runnerPayout: amountNaira - commissionAmount };
 }

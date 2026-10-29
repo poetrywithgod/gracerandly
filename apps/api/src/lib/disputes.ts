@@ -16,10 +16,12 @@ import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client";
 import { disputes, errands, escrowTransactions, type DisputeRow } from "../db/schema";
+import { alertStaff } from "./admin-alerts";
 import { AppErrors } from "./errors";
 import { sendPushToUser } from "./push";
 import { amountCharged, findPaidTransaction, issueRefund } from "./refunds";
 import { createIncident } from "./safety-admin";
+import { getNumberSetting } from "./settings";
 
 export const DISPUTE_REASONS = [
   "item_missing",
@@ -44,8 +46,7 @@ export const DISPUTE_REASON_LABEL: Record<(typeof DISPUTE_REASONS)[number], stri
 const NAIRA = (n: number) => `₦${n.toLocaleString("en-NG")}`;
 
 export function disputeWindowHours(): number {
-  const raw = Number(process.env.DISPUTE_WINDOW_HOURS);
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 48;
+  return getNumberSetting("DISPUTE_WINDOW_HOURS");
 }
 
 export const raiseDisputeSchema = z.object({
@@ -117,6 +118,7 @@ export async function raiseDispute(errand: ErrandRow, requesterId: string, input
     .onConflictDoNothing()
     .returning();
   if (!row) throw AppErrors.conflict("You've already reported a problem with this errand");
+  void alertStaff("dispute_new", "A problem was reported on an errand", `A requester reported: ${DISPUTE_REASON_LABEL[input.reason]}. "${input.description.slice(0, 200)}". The runner's pay is on hold until you decide (Disputes page).`);
   if (errand.runnerId) {
     void sendPushToUser("runner", errand.runnerId, {
       title: "A problem was reported on an errand",

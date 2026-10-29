@@ -169,6 +169,9 @@ const ACTION_LABELS: Record<string, string> = {
   "PATCH /api/team/:id": "Changed a staff account",
   "POST /api/team/:id/password": "Reset a staff password",
   "POST /api/auth/password": "Changed own password",
+  "PUT /api/settings/:key": "Changed a setting",
+  "DELETE /api/settings/:key": "Reset a setting to its default",
+  "POST /api/alerts/test": "Sent a test alert email",
 };
 
 const HIDDEN_FIELDS = /pass|token|key|secret/i;
@@ -190,7 +193,7 @@ export function auditMutations(req: Request, res: Response, next: NextFunction):
     if (res.statusCode >= 400 || !req.admin) return;
     const route = `${req.method} ${(req.route?.path as string | undefined) ?? req.path}`;
     const p = req.params as Record<string, string | undefined>;
-    const target = p.role && p.id ? `${p.role}:${p.id}` : (p.id ?? null);
+    const target = p.role && p.id ? `${p.role}:${p.id}` : (p.id ?? p.key ?? null);
     void audit(req.admin, ACTION_LABELS[route] ?? route, { targetId: target, detail: NO_DETAIL.has(route) ? null : summarise(req.body), ip: clientIp(req) });
   });
   next();

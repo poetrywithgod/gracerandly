@@ -1,3 +1,4 @@
+import { alertStaff } from "../lib/admin-alerts";
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -317,6 +318,7 @@ async function settleRunnerPayout(
     // time the runner requests a payout, no manual intervention needed.
     // Same for any referral bonus that was part of this payout.
     await settleRunnerBonus(payout.id, false);
+    void alertStaff("payout_failed", "A runner payout failed", `Paystack reported a \u20a6${payout.amount.toLocaleString("en-NG")} runner payout as failed: ${outcome.failureReason ?? "no reason given"}. Retry it from the Payouts page.`);
   }
   return true;
 }

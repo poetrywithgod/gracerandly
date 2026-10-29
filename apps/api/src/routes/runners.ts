@@ -24,6 +24,7 @@ import { submitReviewSchema } from "../schemas/review";
 import { getReviewState, listReviewsAbout, ratingSummaryFor, submitReview } from "../lib/reviews";
 import { signAuthToken } from "../lib/jwt";
 import { heldTransactionIds } from "../lib/disputes";
+import { alertStaff } from "../lib/admin-alerts";
 import { assertRowNotSuspended } from "../lib/suspension";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
@@ -601,6 +602,7 @@ router.patch(
       .where(eq(runners.id, req.runnerId!))
       .returning();
 
+    void alertStaff("verification_new", "A runner is waiting for identity review", `${row.fullName} submitted their ID details. They can't go online until you approve them (Verification page).`);
     const activeErrandCount = await countActiveErrands(row.id);
     res.json({ user: { ...toRunner(row), activeErrandCount } });
   })

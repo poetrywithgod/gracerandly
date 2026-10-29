@@ -169,6 +169,8 @@ table{width:100%;border-collapse:collapse;font-size:13px;background:#fff}
 th,td{padding:9px 14px;text-align:left;border-bottom:1px solid var(--line2);white-space:nowrap}
 th{font-weight:500;color:var(--muted);background:var(--panel);position:sticky;top:0}
 td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.banner{background:var(--badbg);color:var(--bad);border-radius:12px;padding:10px 14px;margin:12px 28px 0;display:flex;gap:10px;align-items:center;font-weight:500}.banner span{flex:1}
+.setrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 16px;padding:14px 0;border-top:1px solid var(--line)}.setrow:first-of-type{border-top:0}.setrow .ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.setrow input{border:0;background:#fff;border-radius:12px;padding:9px 12px;box-shadow:inset 0 0 0 1px var(--line);width:130px}.setrow input.wide{width:320px;max-width:100%}.setrow .ok{color:var(--good);font-size:12px}
 .err{background:var(--badbg);color:var(--bad);border-radius:12px;padding:10px 14px;margin:0 0 14px}
 .tk{display:flex;gap:12px;align-items:center;padding:14px 18px;background:#fff;border-radius:16px;margin-bottom:10px;cursor:pointer;border:0;width:100%;text-align:left}
 .tk:hover{box-shadow:0 0 0 1.5px var(--rose)}
@@ -229,6 +231,7 @@ var AVCOL=["#502D55","#935073","#2f7fb3","#2e9b72","#6a55c9","#b0708f"];
 var IC={
  grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
  chart:'<path d="M6 20V10M12 20V4M18 20v-6"/>',
+ gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
  msg:'<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.5 8.5 0 0 1-3.8-.9L3 20l1.2-4.7A8.4 8.4 0 1 1 21 11.5z"/>',
  undo:'<path d="M1 4v6h6"/><path d="M3.5 15a9 9 0 1 0 2.1-9.4L1 10"/>',
  out:'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
@@ -259,6 +262,12 @@ var token=sessionStorage.getItem("gr_admin_token")||"",me=null;
 var page=sessionStorage.getItem("gr_admin_page")||"dashboard";
 var days=Number(sessionStorage.getItem("gr_admin_days")||30);
 var cache=null, prefillErrand="", supportFilter="";
+var since=sessionStorage.getItem("gr_admin_since")||"";
+function daysFromSince(d){var t=new Date(d+"T00:00:00").getTime();return Math.min(365,Math.max(1,Math.ceil((Date.now()-t)/864e5)))}
+if(since)days=daysFromSince(since);
+var EXROLES={refunds:["owner","finance"],payouts:["owner","finance"],disputes:["owner","finance","support"],tickets:["owner","support"],runners:["owner","support"],requesters:["owner","support"]};
+function exportBtn(kind,label){return me&&EXROLES[kind].indexOf(me.role)>=0?'<button class="btn" data-export="'+kind+'">'+icon("down")+(label||"Export CSV")+'</button>':""}
+function downloadExport(kind){return fetch("/admin/api/export/"+kind+".csv",{headers:{"authorization":"Bearer "+token}}).then(function(r){if(r.status===401){sessionStorage.removeItem("gr_admin_token");token="";me=null;renderLogin("Please sign in");throw new Error("auth")}if(!r.ok)return r.json().catch(function(){return {}}).then(function(j){throw new Error((j.error&&j.error.message)||"Couldn\u2019t download that")});return r.blob()}).then(function(b){var a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="gracerandly-"+kind+"-"+new Date().toISOString().slice(0,10)+".csv";a.click()})}
 
 function api(path,opt){
   opt=opt||{};
@@ -420,8 +429,24 @@ function badges(i){
   if(r){r.textContent=a.failedRefunds;r.hidden=!a.failedRefunds}
   var total=attentionItems(i).reduce(function(t,x){return t+x.n},0);
   if(bell){bell.textContent=total;bell.hidden=!total}
+  document.title=(total?"("+total+") ":"")+"Gracerandly admin";
+  if(!prevAtt){prevAtt={};WATCH.forEach(function(w){prevAtt[w[0]]=a[w[0]]})}
 }
 
+/* ---------- auto refresh ---------- */
+var autoTimer=null,prevAtt=null;
+var WATCH=[["activeSos","SOS alert","safety"],["failedRefunds","failed refund","refunds"],["failedPayouts","failed payout","payouts"],["openDisputes","new dispute","disputes"],["pendingVerifications","runner waiting for verification","verification"]];
+function autoRefresh(){
+  if(!token||!me)return;
+  load(true).then(function(d){
+    var a=d.i.attention,msgs=[],go1=null;
+    if(prevAtt)WATCH.forEach(function(w){var n=a[w[0]]-(prevAtt[w[0]]||0);if(n>0){msgs.push(n+" "+w[1]+(n>1?"s":""));if(!go1)go1=w[2]}});
+    prevAtt={};WATCH.forEach(function(w){prevAtt[w[0]]=a[w[0]]});
+    badges(d.i);
+    if(msgs.length){var b=$("#banner");if(b){$("#bannert").textContent="New: "+msgs.join(", ");b.hidden=false;$("#bannergo").onclick=function(){b.hidden=true;go(go1)}}}
+    if(page==="dashboard"&&document.activeElement&&document.activeElement.tagName!=="SELECT"){var y=window.scrollY;dashboardPage(false);setTimeout(function(){window.scrollTo(0,y)},400)}
+  }).catch(function(){});
+}
 /* ---------- shell ---------- */
 var GOLABEL={refunds:"refunds",support:"support",verification:"verification",safety:"safety",payouts:"payouts",disputes:"disputes"};
 var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["people","People","users"],["verification","Verification","shield"],["safety","Safety","alert"],["disputes","Disputes","scale"],["payouts","Payouts","wallet"],["support","Support","msg"],["refunds","Refunds","undo"]];
@@ -443,14 +468,17 @@ function renderLogin(msg){
   });
 }
 function renderShell(){
-  var nav=NAV.slice();if(me.role==="owner"){nav.push(["team","Team","users"],["audit","Audit log","scroll"])}
+  var nav=NAV.slice();if(me.role==="owner"){nav.push(["team","Team","users"],["audit","Audit log","scroll"],["settings","Settings","gear"])}
   $("#app").innerHTML='<div class="shell"><aside class="side"><div class="brand">'+LOGO+'Gracerandly<small>admin</small></div>'+
   '<div class="navh">Menu</div><ul class="nav">'+nav.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="safety"?'<span class="badge red" id="b-safety" hidden></span>':n[0]==="disputes"?'<span class="badge red" id="b-disputes" hidden></span>':n[0]==="payouts"?'<span class="badge red" id="b-payouts" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
   '<div class="navh" style="margin-top:22px">General</div><ul class="nav"><li><button data-page="account">'+icon("user")+'My account</button></li><li><button id="refresh">'+icon("refresh")+'Refresh data</button></li><li><button id="out">'+icon("out")+'Sign out</button></li></ul>'+
   '<div class="sidecard"><h4>Daily numbers</h4><p>Errands, money and sign-ups for every day, ready for a spreadsheet.</p><button id="csv">'+icon("down")+'Download CSV</button></div></aside>'+
   '<div class="main"><header class="top"><div class="search"><span>'+icon("search")+'</span><input id="q" type="search" placeholder="Search errands, tickets, people" aria-label="Search" autocomplete="off"><span class="kbd">Ctrl K</span><div class="results" id="sr" hidden></div></div>'+
   '<div class="topr"><button class="circ" id="mailb" aria-label="Open support">'+icon("mail")+'</button><button class="circ" id="bellb" aria-label="Things that need attention">'+icon("bell")+'<span class="dot" id="bell-n" hidden></span></button><div class="me"><div class="avatar" aria-hidden="true">'+esc(initials(me.fullName))+'</div><div><b>'+esc(me.fullName)+'</b><span>'+esc(ROLELBL[me.role]||me.role)+'</span></div></div><div class="pop" id="pop" hidden></div></div></header>'+
-  '<main class="content" id="content"></main></div></div>';
+  '<div class="banner" id="banner" role="alert" hidden><span id="bannert"></span><button class="btn small" id="bannergo">Open</button><button class="btn ghost small" id="bannerx" aria-label="Dismiss">Dismiss</button></div><main class="content" id="content"></main></div></div>';
+  $("#content").addEventListener("click",function(e){var b=e.target.closest("[data-export]");if(!b)return;b.disabled=true;downloadExport(b.getAttribute("data-export")).then(function(){b.disabled=false}).catch(function(er){b.disabled=false;fail(er)})});
+  $("#bannerx").onclick=function(){$("#banner").hidden=true};
+  if(!autoTimer)autoTimer=setInterval(autoRefresh,30000);
   $$("[data-page]").forEach(function(b){b.onclick=function(){go(b.getAttribute("data-page"))}});
   $("#out").onclick=function(){sessionStorage.removeItem("gr_admin_token");token="";me=null;cache=null;renderLogin()};
   $("#refresh").onclick=function(){cache=null;route(true)};
@@ -473,12 +501,17 @@ function downloadCsv(){
 }
 function go(p){page=p;sessionStorage.setItem("gr_admin_page",p);route(false)}
 function head(title,sub,acts){return '<div class="head"><div><h1>'+title+'</h1><p>'+sub+'</p></div><div class="acts">'+(acts||"")+'</div></div><div class="err" id="err" hidden></div>'}
-function periodSelect(){return '<select class="btn" id="days" aria-label="Period">'+[7,30,90].map(function(d){return '<option value="'+d+'"'+(d===days?" selected":"")+'>Last '+d+' days</option>'}).join("")+'</select>'}
-function wirePeriod(){var s=$("#days");if(s)s.onchange=function(){days=Number(s.value);sessionStorage.setItem("gr_admin_days",days);route(false)}}
+function periodSelect(){var today=new Date().toISOString().slice(0,10);return '<select class="btn" id="days" aria-label="Period">'+[7,30,90].map(function(d){return '<option value="'+d+'"'+(!since&&d===days?" selected":"")+'>Last '+d+' days</option>'}).join("")+'<option value="custom"'+(since?" selected":"")+'>Since a date\u2026</option></select>'+(since?'<input type="date" class="btn" id="since" aria-label="Start date" value="'+since+'" max="'+today+'">':'')}
+function wirePeriod(){var s=$("#days"),d=$("#since");
+  if(s)s.onchange=function(){
+    if(s.value==="custom"){var t=new Date(Date.now()-30*864e5).toISOString().slice(0,10);since=since||t;sessionStorage.setItem("gr_admin_since",since);days=daysFromSince(since)}
+    else{since="";sessionStorage.removeItem("gr_admin_since");days=Number(s.value)}
+    sessionStorage.setItem("gr_admin_days",days);route(false)};
+  if(d)d.onchange=function(){if(!d.value)return;since=d.value;sessionStorage.setItem("gr_admin_since",since);days=daysFromSince(since);route(false)}}
 function route(force){
   $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")===page);if(b.getAttribute("data-page")===page)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});
   var c=$("#content");
-  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="people")peoplePage();else if(page==="team"&&me.role==="owner")teamPage();else if(page==="audit"&&me.role==="owner")auditPage();else if(page==="account")accountPage();else if(page==="verification")verificationPage();else if(page==="safety")safetyPage();else if(page==="disputes")disputesPage();else if(page==="payouts")payoutsPage();else if(page==="support")supportPage();else refundsPage();
+  if(page==="dashboard")dashboardPage(force);else if(page==="analytics")analyticsPage(force);else if(page==="people")peoplePage();else if(page==="team"&&me.role==="owner")teamPage();else if(page==="audit"&&me.role==="owner")auditPage();else if(page==="settings"&&me.role==="owner")settingsPage();else if(page==="account")accountPage();else if(page==="verification")verificationPage();else if(page==="safety")safetyPage();else if(page==="disputes")disputesPage();else if(page==="payouts")payoutsPage();else if(page==="support")supportPage();else refundsPage();
   window.scrollTo(0,0);
 }
 function withData(force,render){
@@ -687,7 +720,7 @@ var dFilter="open";
 var DOUT={refunded:"Refunded",rejected:"Not upheld"};
 function disputesPage(){
   var c=$("#content");c.setAttribute("data-page","disputes");
-  c.innerHTML=head("Disputes","Problems requesters report on delivered errands. The runner’s pay for each one is held until you decide.",'<select class="btn" id="df" aria-label="Show disputes"><option value="open">Waiting for a decision</option><option value="resolved">Decided</option></select>')+'<div id="view">Loading…</div>';
+  c.innerHTML=head("Disputes","Problems requesters report on delivered errands. The runner’s pay for each one is held until you decide.",exportBtn("disputes")+'<select class="btn" id="df" aria-label="Show disputes"><option value="open">Waiting for a decision</option><option value="resolved">Decided</option></select>')+'<div id="view">Loading…</div>';
   var f=$("#df");f.value=dFilter;f.onchange=function(){dFilter=f.value;disputesPage()};
   load(false).then(function(d){badges(d.i)}).catch(function(){});
   api("/disputes?status="+dFilter).then(function(r){
@@ -727,7 +760,7 @@ function disputeOpen(id){
 var pFilter="";
 function payoutsPage(){
   var c=$("#content");c.setAttribute("data-page","payouts");
-  c.innerHTML=head("Payouts","Money sent to runners’ bank accounts, and any that failed.",'<select class="btn" id="pf" aria-label="Show payouts"><option value="">All payouts</option><option value="failed">Failed</option><option value="pending">On the way</option><option value="success">Paid</option></select>')+'<div id="view">Loading…</div>';
+  c.innerHTML=head("Payouts","Money sent to runners’ bank accounts, and any that failed.",exportBtn("payouts")+'<select class="btn" id="pf" aria-label="Show payouts"><option value="">All payouts</option><option value="failed">Failed</option><option value="pending">On the way</option><option value="success">Paid</option></select>')+'<div id="view">Loading…</div>';
   var f=$("#pf");f.value=pFilter;f.onchange=function(){pFilter=f.value;payoutsPage()};
   load(false).then(function(d){badges(d.i)}).catch(function(){});
   api("/payouts"+(pFilter?"?status="+pFilter:"")).then(function(r){
@@ -748,7 +781,7 @@ function peoplePage(){
   var c=$("#content");c.setAttribute("data-page","people");
   $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")==="people")});
   c.innerHTML=head("People","Every requester and runner. Open a profile to see their history, suspend them or record an incident.",
-    '<select class="btn" id="pr" aria-label="Show"><option value="">Everyone</option><option value="requester">Requesters</option><option value="runner">Runners</option></select>')+
+    exportBtn("runners","Runners CSV")+exportBtn("requesters","Requesters CSV")+'<select class="btn" id="pr" aria-label="Show"><option value="">Everyone</option><option value="requester">Requesters</option><option value="runner">Runners</option></select>')+
     '<div class="fld" style="margin-bottom:12px"><input id="pq" type="search" placeholder="Search by name, phone or email" aria-label="Search people" style="flex:1;min-width:200px"><label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="ps"> Suspended only</label></div><div id="view">Loading…</div>';
   var r=$("#pr"),q=$("#pq"),s=$("#ps"),t=null;
   r.value=pState.role;q.value=pState.q;s.checked=pState.susp;
@@ -902,10 +935,30 @@ function accountPage(){
   };
 }
 
+/* ---------- settings ---------- */
+function settingsPage(){
+  page="settings";sessionStorage.setItem("gr_admin_page",page);
+  var c=$("#content");c.setAttribute("data-page","settings");
+  $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")==="settings")});
+  c.innerHTML=head("Settings","Business numbers you can change without a new release. A change applies within a minute.","")+'<div id="view">Loading…</div>';
+  api("/settings").then(function(r){
+    var SRC={custom:'<span class="pillx p-good">Changed here</span>',env:'<span class="pillx p-warn">Server setting</span>',"default":'<span class="pillx p-mute">Default</span>'};
+    $("#view").innerHTML='<section class="card" style="margin-bottom:14px"><h3>Business rules</h3><div id="slist">'+r.settings.map(function(x){
+      var unit=x.unit?" ("+esc(x.unit)+")":"";
+      return '<div class="setrow"><div><b>'+esc(x.label)+'</b> '+SRC[x.source]+'<div class="muted" style="font-size:13px">'+esc(x.help)+(x.kind==="number"?" Default: "+esc(String(x.default))+(x.unit?" "+esc(x.unit):"")+".":"")+'</div></div><div class="ctl"><input data-key="'+x.key+'" '+(x.kind==="number"?'type="number" step="any" min="'+x.min+'" max="'+x.max+'"':'type="text" class="wide" placeholder="name@example.com, other@example.com"')+' value="'+esc(String(x.value==null?"":x.value))+'" aria-label="'+esc(x.label+unit)+'"><button class="btn small" data-save="'+x.key+'">Save</button>'+(x.source==="custom"?'<button class="btn ghost small" data-reset="'+x.key+'">Reset</button>':'')+'<span class="ok" data-msg="'+x.key+'"></span></div></div>'}).join("")+'</div></section>'+
+    '<section class="card"><h3>Email alerts</h3><p class="sub">An email goes to the addresses above when a refund or payout fails, a requester reports a problem, an SOS is raised or a runner is waiting for review. At most one email per kind every 10 minutes.</p><button class="btn" id="testalert">Send a test email</button> <span class="ok" id="testmsg"></span></section>';
+    $$("[data-save]").forEach(function(b){b.onclick=function(){
+      var k=b.getAttribute("data-save"),inp=$('[data-key="'+k+'"]'),def=r.settings.filter(function(x){return x.key===k})[0];
+      b.disabled=true;api("/settings/"+k,{method:"PUT",body:JSON.stringify({value:def.kind==="number"?Number(inp.value):inp.value})}).then(function(){settingsPage()}).catch(function(e){b.disabled=false;fail(e)})}});
+    $$("[data-reset]").forEach(function(b){b.onclick=function(){if(!confirm("Go back to the default for this setting?"))return;api("/settings/"+b.getAttribute("data-reset"),{method:"DELETE"}).then(function(){settingsPage()}).catch(fail)}});
+    $("#testalert").onclick=function(){var b=$("#testalert");b.disabled=true;api("/alerts/test",{method:"POST"}).then(function(j){b.disabled=false;$("#testmsg").textContent="Sent to "+j.sentTo+" address"+(j.sentTo===1?"":"es")}).catch(function(e){b.disabled=false;fail(e)})};
+  }).catch(fail);
+}
+
 /* ---------- support ---------- */
 function supportPage(){
   var c=$("#content");c.setAttribute("data-page","support");
-  c.innerHTML=head("Support","Reply to requesters and runners, then mark tickets resolved.",'<select class="btn" id="filter" aria-label="Show tickets"><option value="">Needs attention</option><option value="open">Open</option><option value="awaiting_user">Waiting on user</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>')+'<div id="view">Loading…</div>';
+  c.innerHTML=head("Support","Reply to requesters and runners, then mark tickets resolved.",exportBtn("tickets")+'<select class="btn" id="filter" aria-label="Show tickets"><option value="">Needs attention</option><option value="open">Open</option><option value="awaiting_user">Waiting on user</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>')+'<div id="view">Loading…</div>';
   var f=$("#filter");f.value=supportFilter;f.onchange=function(){supportFilter=f.value;supportList()};
   load(false).then(function(d){badges(d.i)}).catch(function(){});
   supportList();
@@ -934,7 +987,7 @@ function ticketOpen(id){
 /* ---------- refunds ---------- */
 function refundsPage(){
   var c=$("#content");c.setAttribute("data-page","refunds");
-  c.innerHTML=head("Refunds","Send money back to a requester, and retry refunds that failed.","")+'<div id="view">Loading…</div>';
+  c.innerHTML=head("Refunds","Send money back to a requester, and retry refunds that failed.",exportBtn("refunds"))+'<div id="view">Loading…</div>';
   load(false).then(function(d){badges(d.i)}).catch(function(){});
   api("/refunds").then(function(r){
     var RS={processed:"p-good",pending:"p-warn",failed:"p-bad"};

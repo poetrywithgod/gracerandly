@@ -877,3 +877,16 @@ export const adminAuditLog = pgTable(
   },
   (table) => [index("admin_audit_created_idx").on(table.createdAt)]
 );
+
+// ---------------------------------------------------------------------
+// Settings staff can change from the admin dashboard (lib/settings.ts)
+// ---------------------------------------------------------------------
+
+// A row here overrides the environment variable of the same name; delete the
+// row to go back to the env value (or the built-in default).
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: text("updated_by"),
+});

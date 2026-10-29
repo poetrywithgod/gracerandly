@@ -22,14 +22,14 @@ import { notifyRunnerOfCancellation } from "./errand-notify";
 import { sendPushToUser } from "./push";
 import { restoreCredit, releaseCredit } from "./referrals";
 import { amountCharged, issueRefund } from "./refunds";
+import { getNumberSetting } from "./settings";
 
 type ErrandRow = typeof errands.$inferSelect;
 
 const CANCELLABLE = ["pending_match", "accepted", "en_route_to_pickup"] as const;
 
 export function cancellationFeeNaira(): number {
-  const raw = Number(process.env.CANCELLATION_FEE_NAIRA);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 500;
+  return getNumberSetting("CANCELLATION_FEE_NAIRA");
 }
 
 export interface CancelOutcome {

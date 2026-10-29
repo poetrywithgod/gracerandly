@@ -5,6 +5,7 @@
 import "dotenv/config";
 
 import express from "express";
+import { loadSettings } from "./lib/settings";
 import cors from "cors";
 import authRouter from "./routes/auth";
 import errandsRouter from "./routes/errands";
@@ -97,6 +98,11 @@ const RECURRING_INTERVAL_MS = 60 * 1000;
 const runRecurring = () => runDueRecurring().catch((err) => console.error("[recurring] run failed", err));
 void runRecurring();
 setInterval(runRecurring, RECURRING_INTERVAL_MS).unref();
+
+// Business settings saved from the admin dashboard (lib/settings.ts): load now,
+// and re-read every minute so a second server instance picks up changes too.
+void loadSettings();
+setInterval(() => void loadSettings(), 60 * 1000).unref();
 
 // Cancel and refund errands no runner accepted within STALE_ERRAND_HOURS
 // (default 24; see lib/expiry.ts). Same caveat as above for a sleeping host:
