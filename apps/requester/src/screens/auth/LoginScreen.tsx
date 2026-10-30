@@ -75,8 +75,8 @@ export default function LoginScreen({ navigation }: Props) {
   }, [localPhone, password, signIn, country]);
 
   const handleForgotPassword = useCallback(() => {
-    // navigation.navigate("ForgotPassword");
-  }, []);
+    navigation.navigate("ForgotPassword");
+  }, [navigation]);
 
   const handleGoToSignup = useCallback(() => {
     navigation.navigate("Signup");
