@@ -33,24 +33,47 @@ export async function startRunnerPayout(runnerId: string) {
     throw AppErrors.validation("Your payout account couldn't be verified — check the details and re-save it");
   }
 
-  // Pay for errands with an open dispute stays put until staff decide (lib/disputes.ts).
-  const held = await heldTransactionIds(runnerId);
-  const releasedRows = (
-    await db
-      .select({ id: escrowTransactions.id, runnerPayout: escrowTransactions.runnerPayout })
-      .from(escrowTransactions)
-      .where(and(eq(escrowTransactions.runnerId, runnerId), eq(escrowTransactions.status, "released")))
-  ).filter((row) => !held.has(row.id));
-
-  // Referral bonuses ride along with the earnings: claim them for this
-  // payout up front (so two payout requests can't both take them) and put
-  // them back if anything below fails.
+  // Everything that decides "what is owed" runs under a per-runner lock, so a
+  // double-tap (or a staff retry racing the runner) can't pay the same
+  // earnings twice: the second caller waits, then sees the first payout
+  // still pending and is turned away.
   const payoutId = randomUUID();
-  const bonus = await reserveRunnerBonus(runner.id, payoutId);
-  const amount = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0) + bonus;
-  if (amount <= 0) {
-    throw AppErrors.validation(held.size > 0 ? "Your remaining earnings are on hold while a problem report is reviewed" : "Nothing to pay out yet");
-  }
+  const reference = `gracerandly-payout-${randomUUID()}`;
+  const { payoutRow, amount, transactionIds } = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"payout:" + runnerId}))`);
+
+    const [inFlight] = await tx
+      .select({ id: runnerPayouts.id })
+      .from(runnerPayouts)
+      .where(and(eq(runnerPayouts.runnerId, runnerId), eq(runnerPayouts.status, "pending")))
+      .limit(1);
+    if (inFlight) {
+      throw AppErrors.conflict("A payout is already on its way. It will settle shortly.");
+    }
+
+    // Pay for errands with an open dispute stays put until staff decide (lib/disputes.ts).
+    const held = await heldTransactionIds(runnerId);
+    const releasedRows = (
+      await tx
+        .select({ id: escrowTransactions.id, runnerPayout: escrowTransactions.runnerPayout })
+        .from(escrowTransactions)
+        .where(and(eq(escrowTransactions.runnerId, runnerId), eq(escrowTransactions.status, "released")))
+    ).filter((row) => !held.has(row.id));
+
+    // Referral bonuses ride along with the earnings: claim them for this
+    // payout up front and put them back if anything below fails.
+    const bonus = await reserveRunnerBonus(runner.id, payoutId);
+    const total = releasedRows.reduce((sum, row) => sum + row.runnerPayout, 0) + bonus;
+    if (total <= 0) {
+      throw AppErrors.validation(held.size > 0 ? "Your remaining earnings are on hold while a problem report is reviewed" : "Nothing to pay out yet");
+    }
+    const ids = releasedRows.map((row) => row.id);
+    const [row] = await tx
+      .insert(runnerPayouts)
+      .values({ id: payoutId, runnerId: runner.id, amount: total, status: "pending", transactionIds: ids, providerReference: reference })
+      .returning();
+    return { payoutRow: row, amount: total, transactionIds: ids };
+  });
 
   let recipientCode = runner.paystackRecipientCode;
   if (!recipientCode) {
@@ -61,26 +84,15 @@ export async function startRunnerPayout(runnerId: string) {
         accountName: runner.bankAccountName,
       });
     } catch (err) {
+      await db
+        .update(runnerPayouts)
+        .set({ status: "failed", failureReason: err instanceof Error ? err.message : "Couldn't set up the recipient" })
+        .where(eq(runnerPayouts.id, payoutRow.id));
       await releaseRunnerBonus(payoutId);
       throw err;
     }
     await db.update(runners).set({ paystackRecipientCode: recipientCode }).where(eq(runners.id, runner.id));
   }
-
-  const reference = `gracerandly-payout-${randomUUID()}`;
-  const transactionIds = releasedRows.map((row) => row.id);
-
-  const [payoutRow] = await db
-    .insert(runnerPayouts)
-    .values({
-      id: payoutId,
-      runnerId: runner.id,
-      amount,
-      status: "pending",
-      transactionIds,
-      providerReference: reference,
-    })
-    .returning();
 
   try {
     await initiateTransfer({
