@@ -169,6 +169,7 @@ const ACTION_LABELS: Record<string, string> = {
   "PATCH /api/team/:id": "Changed a staff account",
   "POST /api/team/:id/password": "Reset a staff password",
   "POST /api/auth/password": "Changed own password",
+  "PATCH /api/auth/me": "Updated own profile",
   "PUT /api/settings/:key": "Changed a setting",
   "DELETE /api/settings/:key": "Reset a setting to its default",
   "POST /api/alerts/test": "Sent a test alert email",
@@ -176,7 +177,7 @@ const ACTION_LABELS: Record<string, string> = {
 
 const HIDDEN_FIELDS = /pass|token|key|secret/i;
 // Bodies that are passwords under other names ("current", "next"): never log their contents.
-const NO_DETAIL = new Set(["POST /api/auth/password", "POST /api/team/:id/password"]);
+const NO_DETAIL = new Set(["PATCH /api/auth/me", "POST /api/auth/password", "POST /api/team/:id/password"]);
 
 function summarise(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
@@ -401,6 +402,31 @@ export async function changeOwnPassword(admin: AdminUserRow, input: z.infer<type
     .returning();
   // A fresh token, so this browser stays signed in while every other session ends.
   return { token: signToken(row), admin: view(row) };
+}
+
+export const updateProfileSchema = z.object({
+  fullName: z.string().trim().min(2, "Enter your full name").max(80).optional(),
+  email: emailSchema.optional(),
+  current: z.string().max(200).optional(),
+});
+
+/** Own name and email. Changing the email (it is the sign-in) needs the current password. */
+export async function updateOwnProfile(admin: AdminUserRow, input: z.infer<typeof updateProfileSchema>, ip: string) {
+  const changes: { fullName?: string; email?: string } = {};
+  if (input.fullName && input.fullName !== admin.fullName) changes.fullName = input.fullName;
+  if (input.email && input.email.toLowerCase() !== admin.email.toLowerCase()) {
+    assertNotLocked(admin.email, ip);
+    if (!input.current || !(await bcrypt.compare(input.current, admin.passwordHash))) {
+      if (input.current) recordFail(admin.email, ip);
+      throw AppErrors.validation("Enter your current password to change your email", { current: "Wrong password" });
+    }
+    const [taken] = await db.select({ id: adminUsers.id }).from(adminUsers).where(eq(adminUsers.email, input.email.toLowerCase())).limit(1);
+    if (taken) throw AppErrors.conflict("Another admin already uses that email");
+    changes.email = input.email.toLowerCase();
+  }
+  if (!Object.keys(changes).length) return { admin: view(admin) };
+  const [row] = await db.update(adminUsers).set(changes).where(eq(adminUsers.id, admin.id)).returning();
+  return { admin: view(row) };
 }
 
 export const adminView = view;

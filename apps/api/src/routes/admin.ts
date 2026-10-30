@@ -9,6 +9,8 @@ import {
   auditMutations,
   changeOwnPassword,
   changePasswordSchema,
+  updateOwnProfile,
+  updateProfileSchema,
   clientIp,
   createStaff,
   createStaffSchema,
@@ -100,6 +102,13 @@ router.use("/api", requireStaff, auditMutations);
 router.get("/api/auth/me", (req, res) => {
   res.json({ admin: adminView(req.admin!) });
 });
+
+router.patch(
+  "/api/auth/me",
+  asyncHandler(async (req, res) => {
+    res.json(await updateOwnProfile(req.admin!, updateProfileSchema.parse(req.body), clientIp(req)));
+  })
+);
 
 router.post(
   "/api/auth/password",
