@@ -1,4 +1,6 @@
+import { Platform } from "react-native";
 import * as Location from "expo-location";
+import * as TaskManager from "expo-task-manager";
 import { ensurePermission } from "./permissions";
 
 export interface Coordinate {
@@ -105,28 +107,88 @@ export async function getCurrentCoordinate(): Promise<Coordinate> {
 // the requester wanting to see reasonably live movement.
 export const LOCATION_UPDATE_INTERVAL_MS = 8000;
 
+const LOCATION_TASK = "gracerandly-runner-location";
+
+// Everyone who asked for a watch (OnlineLocationHost while online,
+// LiveLocationHost while an errand is active). They share one foreground
+// service: it starts with the first listener and stops with the last.
+const taskListeners = new Set<(coordinate: Coordinate) => void>();
+let taskStarting: Promise<void> | null = null;
+
+// Must be defined at module level so Android can re-attach it. The task only
+// ever runs while the "sharing your location" notification is showing.
+TaskManager.defineTask(LOCATION_TASK, async ({ data, error }) => {
+  if (error || taskListeners.size === 0) return;
+  const locations = (data as { locations?: Location.LocationObject[] } | undefined)?.locations;
+  const position = locations?.[locations.length - 1];
+  if (!position) return;
+  const coordinate = {
+    latitude: position.coords.latitude,
+    longitude: position.coords.longitude,
+    heading: position.coords.heading ?? undefined,
+  };
+  taskListeners.forEach((listener) => listener(coordinate));
+});
+
 /**
  * Starts watching the device's position and invokes `onUpdate` on every
  * fix (subject to the interval/distance filters below). Returns a cleanup
  * function — call it on unmount or when going offline.
+ *
+ * On Android the watch runs as a foreground service (a visible "sharing your
+ * location" notification) so requesters keep seeing the runner move while the
+ * phone is locked or another app is open. That needs only the normal
+ * while-using-the-app location permission — no background-location permission,
+ * which Google Play restricts. If the service can't start (for example the app
+ * isn't on screen), it falls back to a plain foreground watch.
  */
 export async function watchPosition(onUpdate: (coordinate: Coordinate) => void): Promise<() => void> {
   await requestLocationPermission();
 
-  const subscription = await Location.watchPositionAsync(
-    {
-      accuracy: Location.Accuracy.Balanced,
-      timeInterval: LOCATION_UPDATE_INTERVAL_MS,
-      distanceInterval: 15, // meters
-    },
-    (position) => {
-      onUpdate({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        heading: position.coords.heading ?? undefined,
-      });
+  const options = {
+    accuracy: Location.Accuracy.Balanced,
+    timeInterval: LOCATION_UPDATE_INTERVAL_MS,
+    distanceInterval: 15, // meters
+  };
+
+  if (Platform.OS === "android") {
+    try {
+      taskListeners.add(onUpdate);
+      if (!taskStarting) {
+        taskStarting = (async () => {
+          if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK).catch(() => false)) return;
+          await Location.startLocationUpdatesAsync(LOCATION_TASK, {
+            ...options,
+            foregroundService: {
+              notificationTitle: "Gracerandly is sharing your location",
+              notificationBody: "Your requester can follow this errand. It stops when you go offline or finish.",
+              notificationColor: "#502D55",
+            },
+          });
+        })().finally(() => {
+          taskStarting = null;
+        });
+      }
+      await taskStarting;
+      return () => {
+        taskListeners.delete(onUpdate);
+        if (taskListeners.size === 0) {
+          void Location.stopLocationUpdatesAsync(LOCATION_TASK).catch(() => undefined);
+        }
+      };
+    } catch (err) {
+      taskListeners.delete(onUpdate);
+      console.warn("[location] foreground service unavailable, using a plain watch", err);
     }
-  );
+  }
+
+  const subscription = await Location.watchPositionAsync(options, (position) => {
+    onUpdate({
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      heading: position.coords.heading ?? undefined,
+    });
+  });
 
   return () => subscription.remove();
 }

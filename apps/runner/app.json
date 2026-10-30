@@ -28,7 +28,6 @@
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
@@ -45,8 +44,9 @@
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "Gracerandly needs your location to match you with nearby errands and confirm pickup/delivery.",
-          "locationAlwaysPermission": "Gracerandly needs your location in the background so requesters can track your progress on an errand.",
-          "isAndroidBackgroundLocationEnabled": true
+          "locationWhenInUsePermission": "Gracerandly needs your location to match you with nearby errands and confirm pickup/delivery.",
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [
