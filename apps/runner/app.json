@@ -33,7 +33,7 @@
         "android.permission.FOREGROUND_SERVICE_LOCATION",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ],
-      "package": "com.anonymous.gracerandlyrunner"
+      "package": "com.cyberscribe.gracerandlyrunner"
     },
     "web": {
       "favicon": "./assets/favicon.png"

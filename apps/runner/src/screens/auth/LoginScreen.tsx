@@ -76,6 +76,10 @@ export default function LoginScreen({ navigation }: Props) {
     }
   }, [localPhone, password, signIn, country]);
 
+  const handleForgotPassword = useCallback(() => {
+    navigation.navigate("ForgotPassword");
+  }, [navigation]);
+
   const handleGoToSignup = useCallback(() => {
     navigation.navigate("Signup");
   }, [navigation]);
@@ -129,6 +133,16 @@ export default function LoginScreen({ navigation }: Props) {
             />
 
             {formError ? <Text style={styles.formError}>{formError}</Text> : null}
+
+            <Pressable
+              style={styles.forgot}
+              onPress={handleForgotPassword}
+              hitSlop={8}
+              accessibilityRole="link"
+              accessibilityLabel="Forgot password"
+            >
+              <Text style={styles.forgotText}>Forgot password?</Text>
+            </Pressable>
 
             <Button
               label={isLoading ? "Logging in…" : "Log in"}
@@ -202,6 +216,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#FFB4A8",
     marginBottom: theme.spacing.sm,
+  },
+
+  forgot: {
+    alignSelf: "flex-end",
+    marginBottom: theme.spacing.sm,
+  },
+  forgotText: {
+    fontFamily: theme.fonts.uiSemibold,
+    fontSize: 13,
+    color: theme.colors.textOnPrimary,
+    opacity: 0.95,
   },
 
   loginButton: {
