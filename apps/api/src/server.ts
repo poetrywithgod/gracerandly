@@ -38,7 +38,21 @@ declare global {
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-app.use(cors());
+// Behind Render's proxy: use the real client IP (req.ip) for the attempt limits.
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+  next();
+});
+// The mobile apps send no Origin header, so they are unaffected. Browsers get
+// CORS headers only for sites listed in CORS_ORIGINS (comma-separated). The
+// admin page is served by this API itself, so it needs none.
+const corsOrigins = (process.env.CORS_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean);
+app.use(cors({ origin: corsOrigins.length ? corsOrigins : false }));
 // 100kb (body-parser's default) is plenty for every route except
 // PATCH /auth/me/avatar, which carries a base64-encoded image — that
 // route used to layer its own express.json({ limit: "3mb" }) on top of
@@ -75,6 +89,13 @@ app.use("/internal", internalRouter);
 // Must be registered last — Express identifies error-handling middleware
 // by its four-argument signature.
 app.use(errorHandler);
+
+if (process.env.EXPOSE_DEV_VERIFICATION_CODES === "true") {
+  console.warn("[config] EXPOSE_DEV_VERIFICATION_CODES is true: verification and reset codes are returned in API responses. Turn it off in production.");
+}
+if ((process.env.SMS_PROVIDER ?? "console") === "console") console.warn("[config] SMS_PROVIDER is console: no real text messages are sent.");
+if ((process.env.EMAIL_PROVIDER ?? "console") === "console") console.warn("[config] EMAIL_PROVIDER is console: no real emails are sent.");
+if ((process.env.JWT_SECRET ?? "").length < 32) console.warn("[config] JWT_SECRET is shorter than 32 characters. Use a long random value.");
 
 const httpServer = app.listen(PORT, () => {
   console.log(`Gracerandly API running on port ${PORT}`);

@@ -69,3 +69,11 @@ export const confirmVerificationSchema = z.object({
 });
 
 export type ConfirmVerificationInput = z.infer<typeof confirmVerificationSchema>;
+
+export const forgotPasswordSchema = z.object({ phone: phoneSchema });
+
+export const resetPasswordSchema = z.object({
+  phone: phoneSchema,
+  code: z.string().trim().regex(/^[0-9]{6}$/, "Enter the 6-digit code"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+});

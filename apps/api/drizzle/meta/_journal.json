@@ -183,6 +183,13 @@
       "when": 1793303708842,
       "tag": "0025_app_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793403342856,
+      "tag": "0026_password_resets",
+      "breakpoints": true
     }
   ]
 }

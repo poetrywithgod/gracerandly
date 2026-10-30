@@ -54,6 +54,9 @@ import {
 import { notifyRequesterOfProgress } from "../lib/errand-notify";
 import { dropErrandByRunner } from "../lib/cancellation";
 import { startRunnerPayout } from "../lib/payouts";
+import { loginGuard, limitByIp } from "../lib/attempts";
+import { requestPasswordReset, confirmPasswordReset, setNewPassword } from "../lib/password-reset";
+import { forgotPasswordSchema, resetPasswordSchema } from "../schemas/auth";
 import { refundUnspentItems } from "../lib/refunds";
 import type { Errand, ErrandStatus, Runner, RunnerPayout, VendorDisbursement } from "@gracerandly/shared-types";
 
@@ -215,6 +218,7 @@ router.post(
   "/auth/signup",
   asyncHandler(async (req, res) => {
     const input = runnerSignupSchema.parse(req.body);
+    limitByIp(req, "signup", 20, 60 * 60 * 1000);
 
     const existing = await db
       .select({ id: runners.id, phone: runners.phone, email: runners.email })
@@ -257,15 +261,45 @@ router.post(
 );
 
 router.post(
+  "/auth/forgot-password",
+  asyncHandler(async (req, res) => {
+    const { phone } = forgotPasswordSchema.parse(req.body);
+    limitByIp(req, "forgot", 10, 60 * 60 * 1000);
+    const { devCode } = await requestPasswordReset("runner", phone);
+    res.json({ sent: true, ...(devCode && { devCode }) });
+  })
+);
+
+router.post(
+  "/auth/reset-password",
+  asyncHandler(async (req, res) => {
+    const input = resetPasswordSchema.parse(req.body);
+    limitByIp(req, "reset", 20, 60 * 60 * 1000);
+    const userId = await confirmPasswordReset("runner", input.phone, input.code);
+    await setNewPassword("runner", userId, input.password);
+    res.json({ ok: true });
+  })
+);
+
+router.post(
   "/auth/login",
   asyncHandler(async (req, res) => {
     const input = runnerLoginSchema.parse(req.body);
+    const guard = loginGuard(req, "runner", input.phone);
+    guard.check();
 
     const [row] = await db.select().from(runners).where(eq(runners.phone, input.phone)).limit(1);
-    if (!row) throw AppErrors.unauthorized("Incorrect phone number or password");
+    if (!row) {
+      guard.failed();
+      throw AppErrors.unauthorized("Incorrect phone number or password");
+    }
 
     const passwordMatches = await bcrypt.compare(input.password, row.passwordHash);
-    if (!passwordMatches) throw AppErrors.unauthorized("Incorrect phone number or password");
+    if (!passwordMatches) {
+      guard.failed();
+      throw AppErrors.unauthorized("Incorrect phone number or password");
+    }
+    guard.ok();
 
     assertRowNotSuspended(row);
     const token = signAuthToken({ sub: row.id, role: "runner" });

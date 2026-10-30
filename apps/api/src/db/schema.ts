@@ -890,3 +890,19 @@ export const appSettings = pgTable("app_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   updatedBy: text("updated_by"),
 });
+
+// One pending "forgot my password" code per requester or runner. Only the
+// hash of the code is stored; it dies after 10 minutes or 5 wrong guesses.
+export const passwordResets = pgTable(
+  "password_resets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    role: text("role").notNull(), // "requester" | "runner"
+    userId: uuid("user_id").notNull(),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("password_resets_role_user_idx").on(t.role, t.userId)]
+);

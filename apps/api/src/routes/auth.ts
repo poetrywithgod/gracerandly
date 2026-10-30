@@ -6,6 +6,8 @@ import { requesters } from "../db/schema";
 import {
   signupSchema,
   loginSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
   updateProfileSchema,
   updateAvatarSchema,
   verificationChannelSchema,
@@ -16,6 +18,8 @@ import { assertRowNotSuspended } from "../lib/suspension";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
+import { loginGuard, limitByIp } from "../lib/attempts";
+import { requestPasswordReset, confirmPasswordReset, setNewPassword } from "../lib/password-reset";
 import { requestVerificationCode, confirmVerificationCode } from "../lib/verification";
 import { findCodeOwner, getReferralSummary, normalizeReferralCode, recordReferral } from "../lib/referrals";
 import { ratingSummaryFor, listReviewsAbout } from "../lib/reviews";
@@ -55,6 +59,7 @@ router.post(
   "/signup",
   asyncHandler(async (req, res) => {
     const input = signupSchema.parse(req.body);
+    limitByIp(req, "signup", 20, 60 * 60 * 1000);
 
     const existing = await db
       .select({ id: requesters.id, phone: requesters.phone, email: requesters.email })
@@ -112,9 +117,32 @@ router.get(
 );
 
 router.post(
+  "/forgot-password",
+  asyncHandler(async (req, res) => {
+    const { phone } = forgotPasswordSchema.parse(req.body);
+    limitByIp(req, "forgot", 10, 60 * 60 * 1000);
+    const { devCode } = await requestPasswordReset("requester", phone);
+    res.json({ sent: true, ...(devCode && { devCode }) });
+  })
+);
+
+router.post(
+  "/reset-password",
+  asyncHandler(async (req, res) => {
+    const input = resetPasswordSchema.parse(req.body);
+    limitByIp(req, "reset", 20, 60 * 60 * 1000);
+    const userId = await confirmPasswordReset("requester", input.phone, input.code);
+    await setNewPassword("requester", userId, input.password);
+    res.json({ ok: true });
+  })
+);
+
+router.post(
   "/login",
   asyncHandler(async (req, res) => {
     const input = loginSchema.parse(req.body);
+    const guard = loginGuard(req, "requester", input.phone);
+    guard.check();
 
     const [row] = await db
       .select()
@@ -123,13 +151,16 @@ router.post(
       .limit(1);
 
     if (!row) {
+      guard.failed();
       throw AppErrors.unauthorized("Incorrect phone number or password");
     }
 
     const passwordMatches = await bcrypt.compare(input.password, row.passwordHash);
     if (!passwordMatches) {
+      guard.failed();
       throw AppErrors.unauthorized("Incorrect phone number or password");
     }
+    guard.ok();
 
     assertRowNotSuspended(row);
     const token = signAuthToken({ sub: row.id, role: "requester" });
