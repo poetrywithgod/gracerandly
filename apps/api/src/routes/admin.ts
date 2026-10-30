@@ -108,7 +108,7 @@ router.post(
   })
 );
 
-// Team and audit log: owners only.
+// Team and audit log: Global Admins only.
 router.get(
   "/api/team",
   ownerOnly,
@@ -142,7 +142,7 @@ router.post(
   })
 );
 
-// Settings (owners only): commission, fees, referral amounts, alert emails.
+// Settings (Global Admins only): commission, fees, referral amounts, alert emails.
 router.get(
   "/api/settings",
   ownerOnly,
@@ -185,7 +185,7 @@ router.get(
     const kind = String(req.params.kind).replace(/\.csv$/, "") as ExportKind;
     const allowed = EXPORT_ROLES[kind];
     if (!allowed) throw AppErrors.notFound("Unknown export");
-    if (!allowed.includes(req.admin!.role)) throw new AppError(403, "forbidden", `Your role (${req.admin!.role}) can't download this. Ask an owner.`);
+    if (!allowed.includes(req.admin!.role)) throw new AppError(403, "forbidden", `Your role (${req.admin!.role}) can't download this. Ask a Global Admin.`);
     const { filename, csv } = await buildExport(kind);
     await audit(req.admin!, `Downloaded the ${kind} CSV`, { ip: clientIp(req) });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -465,9 +465,9 @@ router.post(
   "/api/disputes/:id/resolve",
   asyncHandler(async (req, res) => {
     const input = resolveDisputeSchema.parse(req.body);
-    // Support staff can reject a dispute; sending money back is for owners and finance.
+    // Support staff can reject a dispute; sending money back is for Global Admins and finance.
     if (input.outcome === "refund" && req.admin!.role === "support") {
-      throw new AppError(403, "forbidden", "Your role (support) can't send refunds. Ask an owner or finance.");
+      throw new AppError(403, "forbidden", "Your role (support) can't send refunds. Ask a Global Admin or finance.");
     }
     res.json(await resolveDispute(z.uuid().parse(req.params.id), input, req.admin!.email));
   })

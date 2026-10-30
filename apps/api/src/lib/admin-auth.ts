@@ -263,7 +263,7 @@ export async function setupFirstOwner(input: z.infer<typeof setupSchema>, ip: st
       .returning();
     return row;
   });
-  await audit(created, "Created the first owner account", { targetId: created.id, ip });
+  await audit(created, "Created the first Global Admin account", { targetId: created.id, ip });
   return { token: signToken(created), admin: view(created) };
 }
 
@@ -315,7 +315,7 @@ export async function requireStaff(req: Request, _res: Response, next: NextFunct
 export function requireRole(...roles: AdminRole[]) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     if (req.admin && roles.includes(req.admin.role)) return next();
-    next(new AppError(403, "forbidden", `Your role (${req.admin?.role ?? "none"}) can't do this. Ask an owner.`));
+    next(new AppError(403, "forbidden", `Your role (${req.admin?.role ?? "none"}) can't do this. Ask a Global Admin.`));
   };
 }
 
@@ -360,11 +360,11 @@ async function activeOwnerCount(): Promise<number> {
 }
 
 export async function updateStaff(actorId: string, id: string, input: z.infer<typeof updateStaffSchema>) {
-  if (actorId === id) throw AppErrors.conflict("You can't change your own role or disable yourself. Ask another owner.");
+  if (actorId === id) throw AppErrors.conflict("You can't change your own role or disable yourself. Ask another Global Admin.");
   const [target] = await db.select().from(adminUsers).where(eq(adminUsers.id, id)).limit(1);
   if (!target) throw AppErrors.notFound("No staff account with that id");
   const losesOwner = target.role === "owner" && !target.disabledAt && (input.role === "support" || input.role === "finance" || input.disabled === true);
-  if (losesOwner && (await activeOwnerCount()) <= 1) throw AppErrors.conflict("There must always be at least one active owner");
+  if (losesOwner && (await activeOwnerCount()) <= 1) throw AppErrors.conflict("There must always be at least one active Global Admin");
   const patch: Partial<AdminUserRow> = {};
   if (input.role) patch.role = input.role;
   if (input.disabled !== undefined) patch.disabledAt = input.disabled ? new Date() : null;

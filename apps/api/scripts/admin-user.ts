@@ -4,9 +4,9 @@
  *
  *   pnpm --filter api admin:user list
  *   pnpm --filter api admin:user reset <email>            # asks for a new password
- *   pnpm --filter api admin:user create <email> <owner|support|finance> "Full Name"
+ *   pnpm --filter api admin:user create <email> <owner|support|finance>   (owner = Global Admin) "Full Name"
  *
- * Use `reset` when the only owner has forgotten their password. It also signs
+ * Use `reset` when the only Global Admin has forgotten their password. It also signs
  * that person out everywhere. The password is asked for in the terminal so it
  * never lands in your shell history.
  */
@@ -27,7 +27,7 @@ async function main() {
   if (cmd === "list") {
     const list = await db.select().from(adminUsers);
     for (const a of list) console.log(`${a.email}\t${a.role}\t${a.disabledAt ? "disabled" : "active"}\t${a.fullName}`);
-    if (!list.length) console.log("No staff accounts yet. Open /admin and use the setup key to create the first owner.");
+    if (!list.length) console.log("No staff accounts yet. Open /admin and use the setup key to create the first Global Admin.");
     return;
   }
   if (cmd === "reset" && email) {
@@ -45,7 +45,7 @@ async function main() {
     console.log(`Created ${member.email} as ${member.role}.`);
     return;
   }
-  console.log('Usage:\n  admin:user list\n  admin:user reset <email>\n  admin:user create <email> <owner|support|finance> "Full Name"');
+  console.log('Usage:\n  admin:user list\n  admin:user reset <email>\n  admin:user create <email> <owner|support|finance>   (owner = Global Admin) "Full Name"');
 }
 
 main()
