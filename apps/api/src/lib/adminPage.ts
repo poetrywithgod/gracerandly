@@ -8,6 +8,7 @@
  * It is a String.raw template, so the client code below must not contain
  * backticks or a dollar-brace sequence; it builds strings with + instead.
  */
+import { loginSlides } from "./login-art";
 
 const LOGO_PNG =
   "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";
@@ -185,10 +186,33 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .fld{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
 .fld input,textarea.in{border:0;background:#fff;border-radius:14px;padding:11px 14px;box-shadow:inset 0 0 0 1px var(--line);min-width:0}
 .fld input{flex:1 1 180px}textarea.in{width:100%;min-height:96px}
-.login{max-width:380px;margin:12vh auto;background:#fff;border-radius:24px;padding:30px;text-align:center;box-shadow:0 18px 50px rgba(80,45,85,.14)}
-.login h1{font-size:24px;margin:10px 0 4px}.login p{color:var(--muted);margin:0 0 18px}
-.login input{width:100%;border:0;box-shadow:inset 0 0 0 1px var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px;background:var(--cream)}
+.split{display:grid;grid-template-columns:1.1fr 1fr;min-height:100vh;background:#fff}
+.art{position:relative;overflow:hidden;background:#2a1530;color:#fff}
+.slide{position:absolute;inset:0;opacity:0;transition:opacity 1.2s ease;display:flex;align-items:center;justify-content:center}
+.slide.on{opacity:1}
+.slide .pic{position:absolute;inset:0;transform:scale(1.04);transition:transform 6s ease-out}
+.slide.on .pic{transform:scale(1.12)}
+.slide .pic svg,.slide .pic img{width:100%;height:100%;object-fit:cover;display:block}
+.art:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(30,12,36,.35) 0%,rgba(30,12,36,0) 35%,rgba(30,12,36,.82) 100%);pointer-events:none}
+.artbrand{position:absolute;top:28px;left:32px;z-index:3;display:flex;align-items:center;gap:10px;font-weight:600;font-size:18px}
+.artbrand .logo{width:36px;height:36px}
+.cap{position:absolute;left:32px;right:32px;bottom:64px;z-index:3;max-width:460px}
+.cap h2{margin:0 0 6px;font-size:26px;line-height:1.2}.cap p{margin:0;opacity:.88;line-height:1.5}
+.cap>div{position:absolute;left:0;right:0;bottom:0;opacity:0;transform:translateY(10px);transition:opacity .9s ease,transform .9s ease}
+.cap>div.on{opacity:1;transform:none}
+.dots{position:absolute;left:32px;bottom:28px;z-index:3;display:flex;gap:8px}
+.dots i{width:8px;height:8px;border-radius:99px;background:rgba(255,255,255,.4);transition:width .4s,background .4s}
+.dots i.on{width:26px;background:#fff}
+.formside{display:flex;align-items:center;justify-content:center;padding:32px 24px;background:var(--cream)}
+.login{width:100%;max-width:380px;text-align:center}
+.login .logo{display:none}
+.login h1{font-size:26px;margin:0 0 4px}.login p{color:var(--muted);margin:0 0 18px}
+.login input{width:100%;border:0;box-shadow:inset 0 0 0 1px var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px;background:#fff}
 .login .btn{width:100%;justify-content:center}
+.login .lnk{background:none;border:0;color:var(--deep);font-weight:500;margin-top:14px;padding:4px;text-decoration:underline;cursor:pointer}
+.login .ok{background:#e6f4ea;color:#1e6b34;border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:14px}
+@media (max-width:820px){.split{grid-template-columns:1fr;grid-template-rows:200px 1fr;min-height:100vh}.cap,.dots{display:none}.artbrand{top:18px;left:18px}.formside{align-items:flex-start;padding-top:28px}}
+@media (prefers-reduced-motion:reduce){.slide,.slide .pic,.cap>div,.dots i{transition:none}.slide.on .pic{transform:scale(1.04)}}
 @media (max-width:1180px){.c3{grid-column:span 6}.c4{grid-column:span 6}.c5{grid-column:span 6}.c6{grid-column:span 12}.c8{grid-column:span 12}}
 @media (max-width:860px){
   .shell{grid-template-columns:1fr;margin:0;border-radius:0;padding:10px}
@@ -456,18 +480,71 @@ function autoRefresh(){
 /* ---------- shell ---------- */
 var GOLABEL={refunds:"refunds",support:"support",verification:"verification",safety:"safety",payouts:"payouts",disputes:"disputes"};
 var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["people","People","users"],["verification","Verification","shield"],["safety","Safety","alert"],["disputes","Disputes","scale"],["payouts","Payouts","wallet"],["support","Support","msg"],["refunds","Refunds","undo"]];
-function renderLogin(msg){
-  $("#app").innerHTML='<div class="login">'+LOGO+'<h1>Gracerandly admin</h1><p>Sign in with your staff account.</p><div class="err" id="lerr"'+(msg?'':' hidden')+'>'+esc(msg||"")+'</div>'+
-  '<input id="le" type="email" placeholder="Email" aria-label="Email" autocomplete="username"><input id="lp" type="password" placeholder="Password" aria-label="Password" autocomplete="current-password"><button class="btn" id="go">Sign in</button></div>';
+var SLIDES=__SLIDES__;var slideTimer=0;
+function stopSlides(){if(slideTimer){clearInterval(slideTimer);slideTimer=0}}
+function artHtml(){
+  var sl=SLIDES.map(function(x,i){return '<div class="slide'+(i===0?' on':'')+'"><div class="pic">'+(x.img?'<img src="'+esc(x.img)+'" alt="">':(x.svg||''))+'</div></div>'}).join("");
+  var cp=SLIDES.map(function(x,i){return '<div'+(i===0?' class="on"':'')+'><h2>'+esc(x.title)+'</h2><p>'+esc(x.text)+'</p></div>'}).join("");
+  var dots=SLIDES.map(function(x,i){return '<i'+(i===0?' class="on"':'')+'></i>'}).join("");
+  return '<div class="art" aria-hidden="true">'+sl+'<div class="artbrand">'+LOGO+'Gracerandly</div><div class="cap">'+cp+'</div><div class="dots">'+dots+'</div></div>';
+}
+function startSlides(){
+  stopSlides();var n=SLIDES.length;if(n<2)return;var cur=0;
+  var slides=$$(".slide"),caps=$$(".cap>div"),dots=$$(".dots i");
+  slideTimer=setInterval(function(){
+    if(!document.querySelector(".art")){stopSlides();return}
+    slides[cur].classList.remove("on");caps[cur].classList.remove("on");dots[cur].classList.remove("on");
+    cur=(cur+1)%n;
+    slides[cur].classList.add("on");caps[cur].classList.add("on");dots[cur].classList.add("on");
+  },4000);
+}
+function loginFrame(inner){
+  stopSlides();
+  $("#app").innerHTML='<div class="split">'+artHtml()+'<div class="formside"><div class="login">'+LOGO+inner+'</div></div></div>';
+  startSlides();
+}
+function postJson(url,body){return fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json().catch(function(){return {}}).then(function(j){return {ok:r.ok,j:j}})})}
+function showErr(m){var e=$("#lerr");e.textContent=m;e.hidden=false}
+function errMsg(x,d){return (x.j&&x.j.error&&x.j.error.message)||d}
+function renderLogin(msg,notice){
+  loginFrame('<h1>Welcome back</h1><p>Sign in to the Gracerandly admin.</p>'+(notice?'<div class="ok">'+esc(notice)+'</div>':'')+'<div class="err" id="lerr"'+(msg?'':' hidden')+'>'+esc(msg||"")+'</div>'+
+  '<input id="le" type="email" placeholder="Email" aria-label="Email" autocomplete="username"><input id="lp" type="password" placeholder="Password" aria-label="Password" autocomplete="current-password"><button class="btn" id="go">Sign in</button><button class="lnk" id="fp" type="button">Forgot your password?</button>');
   var go=function(){
     var email=$("#le").value.trim(),pw=$("#lp").value;if(!email||!pw)return;
     var btn=$("#go");btn.disabled=true;
-    fetch("/admin/api/auth/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email:email,password:pw})}).then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}})}).then(function(x){
-      if(!x.ok){btn.disabled=false;var e=$("#lerr");e.textContent=(x.j.error&&x.j.error.message)||"Couldn\u2019t sign in";e.hidden=false;return}
-      token=x.j.token;me=x.j.admin;sessionStorage.setItem("gr_admin_token",token);start();
-    }).catch(function(){btn.disabled=false;var e=$("#lerr");e.textContent="Couldn\u2019t reach the server";e.hidden=false});
+    postJson("/admin/api/auth/login",{email:email,password:pw}).then(function(x){
+      if(!x.ok){btn.disabled=false;showErr(errMsg(x,"Couldn’t sign in"));return}
+      stopSlides();token=x.j.token;me=x.j.admin;sessionStorage.setItem("gr_admin_token",token);start();
+    }).catch(function(){btn.disabled=false;showErr("Couldn’t reach the server")});
   };
   $("#go").onclick=go;$$(".login input").forEach(function(i){i.onkeydown=function(e){if(e.key==="Enter")go()}});$("#le").focus();
+  $("#fp").onclick=function(){renderForgot($("#le").value.trim())};
+}
+function renderForgot(email){
+  loginFrame('<h1>Forgot your password?</h1><p>Enter your staff email and we’ll send you a 6-digit code.</p><div class="err" id="lerr" hidden></div>'+
+  '<input id="fe" type="email" placeholder="Email" aria-label="Email" autocomplete="username"><button class="btn" id="fsend">Send code</button><button class="lnk" id="fback" type="button">Back to sign in</button>');
+  $("#fe").value=email||"";$("#fe").focus();
+  var send=function(){
+    var em=$("#fe").value.trim();if(!em)return;var btn=$("#fsend");btn.disabled=true;
+    postJson("/admin/api/auth/forgot",{email:em}).then(function(x){
+      if(!x.ok){btn.disabled=false;showErr(errMsg(x,"Couldn’t send the code"));return}
+      renderReset(em,x.j.devCode);
+    }).catch(function(){btn.disabled=false;showErr("Couldn’t reach the server")});
+  };
+  $("#fsend").onclick=send;$("#fe").onkeydown=function(e){if(e.key==="Enter")send()};$("#fback").onclick=function(){renderLogin()};
+}
+function renderReset(email,devCode){
+  loginFrame('<h1>Check your email</h1><p>If <b>'+esc(email)+'</b> is a staff account, a code is on its way. It lasts 10 minutes.</p>'+(devCode?'<div class="ok">Test code: '+esc(devCode)+'</div>':'')+'<div class="err" id="lerr" hidden></div>'+
+  '<input id="rc" inputmode="numeric" maxlength="6" placeholder="6-digit code" aria-label="Code" autocomplete="one-time-code"><input id="rp" type="password" placeholder="New password (10+ characters, with a number)" aria-label="New password" autocomplete="new-password"><button class="btn" id="rgo">Set new password</button><button class="lnk" id="rback" type="button">Back to sign in</button>');
+  $("#rc").focus();
+  var go=function(){
+    var code=$("#rc").value.trim(),pw=$("#rp").value;if(!code||!pw)return;var btn=$("#rgo");btn.disabled=true;
+    postJson("/admin/api/auth/reset",{email:email,code:code,password:pw}).then(function(x){
+      if(!x.ok){btn.disabled=false;showErr(errMsg(x,"Couldn’t reset the password"));return}
+      renderLogin("","Password changed. Sign in with your new password.");
+    }).catch(function(){btn.disabled=false;showErr("Couldn’t reach the server")});
+  };
+  $("#rgo").onclick=go;$$(".login input").forEach(function(i){i.onkeydown=function(e){if(e.key==="Enter")go()}});$("#rback").onclick=function(){renderLogin()};
 }
 function renderShell(){
   var nav=NAV.slice();if(me.role==="owner"){nav.push(["team","Team","users"],["audit","Audit log","scroll"],["settings","Settings","gear"])}
@@ -1053,9 +1130,9 @@ export const ADMIN_PAGE =
   "</style></head><body>" +
   BODY +
   "<script>" +
-  SCRIPT.replace("__LOGO__", "data:image/png;base64," + LOGO_PNG) +
+  SCRIPT.replace("__LOGO__", "data:image/png;base64," + LOGO_PNG).replace("__SLIDES__", () => JSON.stringify(loginSlides()).replace(/</g, "\\u003c")) +
   "</script></body></html>";
 
 /** Content-Security-Policy for the page above: inline code only, Google Fonts for Poppins, and same-origin API calls. */
 export const ADMIN_PAGE_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'";
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'";

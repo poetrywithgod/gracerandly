@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../lib/asyncHandler";
 import { AppError, AppErrors } from "../lib/errors";
@@ -13,6 +13,7 @@ import {
   clientIp,
   createStaff,
   createStaffSchema,
+  emailSchema,
   listAudit,
   listTeam,
   login,
@@ -28,6 +29,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { errands, refunds } from "../db/schema";
 import { dailyCsv, getAnalytics } from "../lib/analytics";
+import { LOGIN_ART_DIR } from "../lib/login-art";
 import { ADMIN_PAGE, ADMIN_PAGE_CSP } from "../lib/adminPage";
 import { adminSearch, getInsights } from "../lib/insights";
 import { adminListPayouts, adminRetryPayout } from "../lib/payouts";
@@ -53,6 +55,8 @@ import {
   staffUnassignSchema,
   suspendSchema,
 } from "../lib/people-admin";
+import { limitByIp } from "../lib/attempts";
+import { confirmAdminPasswordReset, requestAdminPasswordReset } from "../lib/password-reset";
 import { sendTestAlert, alertRecipients } from "../lib/admin-alerts";
 import { EXPORT_ROLES, buildExport, type ExportKind } from "../lib/exports";
 import { listSettings, resetSetting, saveSetting } from "../lib/settings";
@@ -74,6 +78,33 @@ const ownerOnly = requireRole("owner");
 // There is deliberately no sign-up or "first admin" screen: the first Global Admin
 // is created straight in the database (see scripts/admin-user.ts), and every other
 // admin is added by a Global Admin from the Team page.
+router.use("/login-art", express.static(LOGIN_ART_DIR, { index: false, maxAge: "1h", fallthrough: true }));
+
+router.post(
+  "/api/auth/forgot",
+  asyncHandler(async (req, res) => {
+    if (dashboardOff()) throw AppErrors.notFound();
+    const { email } = z.object({ email: emailSchema }).parse(req.body);
+    limitByIp(req, "admin-forgot", 10, 60 * 60 * 1000);
+    const { devCode } = await requestAdminPasswordReset(email);
+    res.json({ sent: true, ...(devCode && { devCode }) });
+  })
+);
+
+router.post(
+  "/api/auth/reset",
+  asyncHandler(async (req, res) => {
+    if (dashboardOff()) throw AppErrors.notFound();
+    const input = z
+      .object({ email: emailSchema, code: z.string().trim().regex(/^[0-9]{6}$/, "Enter the 6-digit code"), password: passwordSchema })
+      .parse(req.body);
+    limitByIp(req, "admin-reset", 20, 60 * 60 * 1000);
+    const id = await confirmAdminPasswordReset(input.email, input.code);
+    await resetStaffPassword(id, input.password);
+    res.json({ ok: true });
+  })
+);
+
 router.post(
   "/api/auth/login",
   asyncHandler(async (req, res) => {

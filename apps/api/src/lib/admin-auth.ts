@@ -57,7 +57,7 @@ export const passwordSchema = z
   .max(100, "Use at most 100 characters")
   .refine((p) => /[A-Za-z]/.test(p) && /[0-9]/.test(p), "Use letters and at least one number");
 
-const emailSchema = z.string().trim().toLowerCase().email("Enter a valid email address").max(120);
+export const emailSchema = z.string().trim().toLowerCase().email("Enter a valid email address").max(120);
 
 function tokenSecret(): string {
   const base = process.env.JWT_SECRET;

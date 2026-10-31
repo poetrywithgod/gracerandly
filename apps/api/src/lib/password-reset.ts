@@ -8,7 +8,7 @@ import { randomInt } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/client";
-import { passwordResets, requesters, runners } from "../db/schema";
+import { adminUsers, passwordResets, requesters, runners } from "../db/schema";
 import { AppErrors } from "./errors";
 import { smsProvider } from "./sms";
 import { emailProvider } from "./email";
@@ -89,4 +89,73 @@ export async function setNewPassword(role: ResetRole, userId: string, password: 
   const passwordHash = await bcrypt.hash(password, 12);
   if (role === "requester") await db.update(requesters).set({ passwordHash }).where(eq(requesters.id, userId));
   else await db.update(runners).set({ passwordHash }).where(eq(runners.id, userId));
+}
+
+// ---------------------------------------------------------------------
+// Staff ("forgot password" on the admin sign-in screen)
+// ---------------------------------------------------------------------
+// Same code table, role "admin". The code only goes to the staff member's
+// own email address, and the answer is the same whether or not the email
+// belongs to an account. Disabled accounts can't reset.
+
+async function findAdmin(email: string) {
+  const [row] = await db.select().from(adminUsers).where(eq(adminUsers.email, email.toLowerCase())).limit(1);
+  return row && !row.disabledAt ? row : null;
+}
+
+export async function requestAdminPasswordReset(email: string): Promise<{ devCode?: string }> {
+  const user = await findAdmin(email);
+  if (!user) return {};
+
+  const [existing] = await db
+    .select()
+    .from(passwordResets)
+    .where(and(eq(passwordResets.role, "admin"), eq(passwordResets.userId, user.id)))
+    .limit(1);
+  if (existing && (Date.now() - existing.createdAt.getTime()) / 1000 < COOLDOWN_SECONDS) return {};
+
+  const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
+  const codeHash = await bcrypt.hash(code, 10);
+  const expiresAt = new Date(Date.now() + TTL_MINUTES * 60 * 1000);
+  await db
+    .insert(passwordResets)
+    .values({ role: "admin", userId: user.id, codeHash, expiresAt, attempts: 0 })
+    .onConflictDoUpdate({
+      target: [passwordResets.role, passwordResets.userId],
+      set: { codeHash, expiresAt, attempts: 0, createdAt: new Date() },
+    });
+
+  try {
+    await emailProvider.send(
+      user.email,
+      "Reset your Gracerandly admin password",
+      `${code} is your Gracerandly admin password reset code. It expires in ${TTL_MINUTES} minutes. If you didn't ask for it, ignore this email and tell a Global Admin.`
+    );
+  } catch (err) {
+    console.error("[password-reset] admin email failed", err);
+  }
+  return EXPOSE_DEV_CODES ? { devCode: code } : {};
+}
+
+/** Checks the emailed code and returns the staff account id. One friendly error for every failure. */
+export async function confirmAdminPasswordReset(email: string, code: string): Promise<string> {
+  const bad = () => AppErrors.validation("That code isn't right or has expired. Ask for a new one.", { code: "Wrong or expired code" });
+  const user = await findAdmin(email);
+  if (!user) throw bad();
+  const [row] = await db
+    .select()
+    .from(passwordResets)
+    .where(and(eq(passwordResets.role, "admin"), eq(passwordResets.userId, user.id)))
+    .limit(1);
+  if (!row) throw bad();
+  if (row.expiresAt.getTime() < Date.now() || row.attempts >= MAX_ATTEMPTS) {
+    await db.delete(passwordResets).where(eq(passwordResets.id, row.id));
+    throw bad();
+  }
+  if (!(await bcrypt.compare(code, row.codeHash))) {
+    await db.update(passwordResets).set({ attempts: row.attempts + 1 }).where(eq(passwordResets.id, row.id));
+    throw bad();
+  }
+  await db.delete(passwordResets).where(eq(passwordResets.id, row.id));
+  return user.id;
 }
