@@ -6,12 +6,12 @@
  * every request re-reads the account, so disabling someone or changing a
  * password takes effect straight away on every device.
  *
- * ADMIN_API_KEY is no longer a login. It does two things only:
- *  - it switches the admin page on (the page 404s without it), and
- *  - it is the setup key for creating the very first owner, once, while no
- *    staff account exists. After that it can't be used for anything.
- * Forgotten owner password: `pnpm --filter api admin:user reset <email>`
- * (run where the database is reachable).
+ * There is no public sign-up. The first Global Admin ("owner") is created
+ * straight in the database: `pnpm --filter api admin:user sql <email> "Full Name"`
+ * prints an INSERT to paste into the Supabase SQL editor (or use `create`).
+ * That person then adds everyone else from the Team page. Forgotten password:
+ * `pnpm --filter api admin:user reset <email>` (run where the database is reachable).
+ * ADMIN_API_KEY is no longer used; ADMIN_DASHBOARD=off switches the dashboard off.
  *
  * Sign-in is rate limited: 5 wrong passwords for one email, or 20 from one
  * address, in 15 minutes locks that email/address out for the rest of the
@@ -20,7 +20,6 @@
  * Every change a signed-in person makes, and every sign-in, is written to
  * the audit log (auditMutations below).
  */
-import { timingSafeEqual } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
@@ -225,48 +224,6 @@ export async function listAudit(opts: { adminId?: string; q?: string; limit?: nu
 // ---------------------------------------------------------------------
 // Sign-in, setup, middleware
 // ---------------------------------------------------------------------
-
-export async function adminCount(): Promise<number> {
-  const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(adminUsers);
-  return r?.n ?? 0;
-}
-
-function keyMatches(given: string, expected: string): boolean {
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-export const setupSchema = z.object({
-  setupKey: z.string().min(1, "Enter the setup key"),
-  fullName: z.string().trim().min(2, "Enter your name").max(80),
-  email: emailSchema,
-  password: passwordSchema,
-});
-
-/** Creates the first owner. Only works while there are no staff accounts, and needs ADMIN_API_KEY. */
-export async function setupFirstOwner(input: z.infer<typeof setupSchema>, ip: string) {
-  const expected = process.env.ADMIN_API_KEY?.trim();
-  if (!expected) throw AppErrors.notFound();
-  assertNotLocked(input.email, ip);
-  if (!keyMatches(input.setupKey, expected)) {
-    recordFail(input.email, ip);
-    throw AppErrors.unauthorized("That setup key is wrong");
-  }
-  const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
-  const created = await db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(42001)`);
-    const [c] = await tx.select({ n: sql<number>`count(*)::int` }).from(adminUsers);
-    if ((c?.n ?? 0) > 0) throw AppErrors.conflict("Setup is already done. Sign in with your staff account.");
-    const [row] = await tx
-      .insert(adminUsers)
-      .values({ email: input.email, fullName: input.fullName, role: "owner", passwordHash, lastLoginAt: new Date() })
-      .returning();
-    return row;
-  });
-  await audit(created, "Created the first Global Admin account", { targetId: created.id, ip });
-  return { token: signToken(created), admin: view(created) };
-}
 
 export const loginSchema = z.object({ email: emailSchema, password: z.string().min(1, "Enter your password").max(200) });
 

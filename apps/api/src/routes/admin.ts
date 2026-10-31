@@ -3,7 +3,6 @@ import { z } from "zod";
 import { asyncHandler } from "../lib/asyncHandler";
 import { AppError, AppErrors } from "../lib/errors";
 import {
-  adminCount,
   audit,
   adminView,
   auditMutations,
@@ -22,8 +21,6 @@ import {
   requireRole,
   requireStaff,
   resetStaffPassword,
-  setupFirstOwner,
-  setupSchema,
   updateStaff,
   updateStaffSchema,
 } from "../lib/admin-auth";
@@ -63,9 +60,10 @@ import { adminGetDispute, adminListDisputes, resolveDisputeSchema, resolveDisput
 import { findPaidTransaction, issueRefund, retryRefund } from "../lib/refunds";
 import { SUPPORT_STATUSES, adminGet, adminList, adminReply, adminSetStatus, replySchema } from "../lib/support";
 
-// Staff side of support. Guarded by one shared key (ADMIN_API_KEY); the whole
-// thing is switched off (404) until that's set. The page itself lives in
-// lib/adminPage.ts.
+// Staff dashboard API. Every route needs a signed-in staff account; set
+// ADMIN_DASHBOARD=off to switch the whole thing off (404). The page itself lives
+// in lib/adminPage.ts.
+const dashboardOff = () => (process.env.ADMIN_DASHBOARD ?? "").trim().toLowerCase() === "off";
 const router: Router = Router();
 
 const supportOnly = requireRole("owner", "support");
@@ -73,25 +71,13 @@ const moneyOnly = requireRole("owner", "finance");
 const ownerOnly = requireRole("owner");
 
 // ---- Sign-in (public) ----
-// The page is on while ADMIN_API_KEY is set. The key only creates the first owner.
-router.get(
-  "/api/auth/status",
-  asyncHandler(async (_req, res) => {
-    res.json({ setupNeeded: (await adminCount()) === 0 });
-  })
-);
-
-router.post(
-  "/api/auth/setup",
-  asyncHandler(async (req, res) => {
-    res.status(201).json(await setupFirstOwner(setupSchema.parse(req.body), clientIp(req)));
-  })
-);
-
+// There is deliberately no sign-up or "first admin" screen: the first Global Admin
+// is created straight in the database (see scripts/admin-user.ts), and every other
+// admin is added by a Global Admin from the Team page.
 router.post(
   "/api/auth/login",
   asyncHandler(async (req, res) => {
-    if (!process.env.ADMIN_API_KEY?.trim()) throw AppErrors.notFound();
+    if (dashboardOff()) throw AppErrors.notFound();
     res.json(await login(loginSchema.parse(req.body), clientIp(req)));
   })
 );
@@ -218,7 +204,7 @@ router.get(
 
 // The page itself is just a shell; it holds no data and needs no key to load.
 router.get(["/", "/support"], (_req, res) => {
-  if (!process.env.ADMIN_API_KEY?.trim()) {
+  if (dashboardOff()) {
     res.status(404).send("Not found");
     return;
   }

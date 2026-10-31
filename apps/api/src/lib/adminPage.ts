@@ -457,21 +457,17 @@ function autoRefresh(){
 var GOLABEL={refunds:"refunds",support:"support",verification:"verification",safety:"safety",payouts:"payouts",disputes:"disputes"};
 var NAV=[["dashboard","Dashboard","grid"],["analytics","Analytics","chart"],["people","People","users"],["verification","Verification","shield"],["safety","Safety","alert"],["disputes","Disputes","scale"],["payouts","Payouts","wallet"],["support","Support","msg"],["refunds","Refunds","undo"]];
 function renderLogin(msg){
-  fetch("/admin/api/auth/status").then(function(r){return r.json()}).catch(function(){return {setupNeeded:false}}).then(function(st){
-    var setup=!!st.setupNeeded;
-    $("#app").innerHTML='<div class="login">'+LOGO+'<h1>Gracerandly admin</h1><p>'+(setup?'Set up the first Global Admin account. You\u2019ll need the setup key (ADMIN_API_KEY on the server).':'Sign in with your staff account.')+'</p><div class="err" id="lerr"'+(msg?'':' hidden')+'>'+esc(msg||"")+'</div>'+
-    (setup?'<input id="ln" placeholder="Your full name" aria-label="Full name" autocomplete="name">':'')+'<input id="le" type="email" placeholder="Email" aria-label="Email" autocomplete="username"><input id="lp" type="password" placeholder="'+(setup?"Password (10+ characters, with a number)":"Password")+'" aria-label="Password" autocomplete="'+(setup?"new-password":"current-password")+'">'+(setup?'<input id="lk" type="password" placeholder="Setup key" aria-label="Setup key" autocomplete="off">':'')+'<button class="btn" id="go">'+(setup?"Create Global Admin account":"Sign in")+'</button></div>';
-    var go=function(){
-      var email=$("#le").value.trim(),pw=$("#lp").value;if(!email||!pw)return;
-      var body=setup?{fullName:$("#ln").value,email:email,password:pw,setupKey:$("#lk").value.trim()}:{email:email,password:pw};
-      var btn=$("#go");btn.disabled=true;
-      fetch("/admin/api/auth/"+(setup?"setup":"login"),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}})}).then(function(x){
-        if(!x.ok){btn.disabled=false;var e=$("#lerr");e.textContent=(x.j.error&&x.j.error.message)||"Couldn\u2019t sign in";e.hidden=false;return}
-        token=x.j.token;me=x.j.admin;sessionStorage.setItem("gr_admin_token",token);start();
-      }).catch(function(){btn.disabled=false;var e=$("#lerr");e.textContent="Couldn\u2019t reach the server";e.hidden=false});
-    };
-    $("#go").onclick=go;$$(".login input").forEach(function(i){i.onkeydown=function(e){if(e.key==="Enter")go()}});($("#ln")||$("#le")).focus();
-  });
+  $("#app").innerHTML='<div class="login">'+LOGO+'<h1>Gracerandly admin</h1><p>Sign in with your staff account.</p><div class="err" id="lerr"'+(msg?'':' hidden')+'>'+esc(msg||"")+'</div>'+
+  '<input id="le" type="email" placeholder="Email" aria-label="Email" autocomplete="username"><input id="lp" type="password" placeholder="Password" aria-label="Password" autocomplete="current-password"><button class="btn" id="go">Sign in</button></div>';
+  var go=function(){
+    var email=$("#le").value.trim(),pw=$("#lp").value;if(!email||!pw)return;
+    var btn=$("#go");btn.disabled=true;
+    fetch("/admin/api/auth/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email:email,password:pw})}).then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}})}).then(function(x){
+      if(!x.ok){btn.disabled=false;var e=$("#lerr");e.textContent=(x.j.error&&x.j.error.message)||"Couldn\u2019t sign in";e.hidden=false;return}
+      token=x.j.token;me=x.j.admin;sessionStorage.setItem("gr_admin_token",token);start();
+    }).catch(function(){btn.disabled=false;var e=$("#lerr");e.textContent="Couldn\u2019t reach the server";e.hidden=false});
+  };
+  $("#go").onclick=go;$$(".login input").forEach(function(i){i.onkeydown=function(e){if(e.key==="Enter")go()}});$("#le").focus();
 }
 function renderShell(){
   var nav=NAV.slice();if(me.role==="owner"){nav.push(["team","Team","users"],["audit","Audit log","scroll"],["settings","Settings","gear"])}
