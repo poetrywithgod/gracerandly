@@ -55,6 +55,8 @@ export interface PayoutAccount {
   verified: boolean;
 }
 
+export type IdType = "nin" | "bvn" | "passport" | "drivers_license";
+
 export type VerificationStatus = "unsubmitted" | "pending" | "approved" | "rejected";
 
 export interface Runner extends BaseUser {
@@ -63,13 +65,13 @@ export interface Runner extends BaseUser {
   avatarUrl?: string;
   vehicleType?: VehicleType;
   /**
-   * Identity verification (NIN/BVN/guarantor) happens post-signup, in the
-   * Runner app's settings — see routes/runners.ts's PATCH /me/verification.
-   * These three are undefined until the runner submits them, and a runner
-   * can't go online or accept errands until they do (identityVerified).
+   * Identity verification (one ID plus a guarantor) happens post-signup, in
+   * the Runner app's settings — see routes/runners.ts's PATCH /me/verification.
+   * These are undefined until the runner submits them, and a runner can't go
+   * online or accept errands until staff approve them (identityVerified).
    */
-  nin?: string;
-  bvn?: string;
+  idType?: IdType;
+  idNumber?: string;
   identityVerified: boolean;
   /** Where the submission stands: staff review it before identityVerified turns true. */
   verificationStatus: VerificationStatus;

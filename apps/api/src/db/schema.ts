@@ -98,8 +98,13 @@ export const runners = pgTable("runners", {
   // admin review step or registry check yet (see that route for the
   // "self-serve auto-verify, revisit once Trust & Safety review exists"
   // caveat), it's just the gate on going online / accepting errands.
+  // Legacy columns from when both were required. New submissions use idType +
+  // idNumber (one of NIN, BVN, passport or driver's licence); old values were
+  // copied across by migration 0027.
   nin: text("nin"),
   bvn: text("bvn"),
+  idType: text("id_type"), // "nin" | "bvn" | "passport" | "drivers_license"
+  idNumber: text("id_number"),
   // identityVerified is now the *result* of staff review, not of submitting
   // the form: it is true only while verificationStatus is "approved" (see
   // lib/identity-review.ts). Submitting moves unsubmitted/rejected -> pending;

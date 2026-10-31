@@ -2,7 +2,7 @@
  * Staff review of runner identity submissions (admin dashboard, Verification
  * page).
  *
- * A runner submits NIN, BVN and a guarantor from the Runner app
+ * A runner submits one ID (NIN, BVN, passport or driver's licence) and a guarantor from the Runner app
  * (routes/runners.ts PATCH /me/verification) and lands in "pending". Staff
  * approve (identityVerified = true, the runner can go online) or reject with
  * a reason the runner sees and can fix. A previously approved runner can be
@@ -35,8 +35,8 @@ export interface ReviewListItem {
   fullName: string;
   phone: string;
   status: ReviewStatus;
-  ninMasked: string | null;
-  bvnMasked: string | null;
+  idType: string | null;
+  idMasked: string | null;
   submittedAt: string | null;
   reviewedAt: string | null;
   note: string | null;
@@ -55,8 +55,8 @@ export async function listReviews(status: string | undefined): Promise<ReviewLis
     fullName: r.fullName,
     phone: r.phone,
     status: r.verificationStatus,
-    ninMasked: mask(r.nin),
-    bvnMasked: mask(r.bvn),
+    idType: r.idType,
+    idMasked: mask(r.idNumber),
     submittedAt: r.verificationSubmittedAt?.toISOString() ?? null,
     reviewedAt: r.verificationReviewedAt?.toISOString() ?? null,
     note: r.verificationNote,
@@ -79,8 +79,7 @@ export async function getReview(id: string) {
   if (!r) throw AppErrors.notFound("No runner with that id");
   const stats = await db.execute(sql`select
       (select count(*) from errands where runner_id = ${id} and status = 'delivered') delivered,
-      (select count(*) from runners where id <> ${id} and (nin = ${r.nin ?? ""} or bvn = ${r.bvn ?? ""})
-         and (${r.nin ?? ""} <> '' or ${r.bvn ?? ""} <> '')) duplicate_ids,
+      (select count(*) from runners where id <> ${id} and id_number = ${r.idNumber ?? ""} and ${r.idNumber ?? ""} <> '') duplicate_ids,
       (select count(*) from runners where id <> ${id} and guarantor ->> 'phone' = ${r.guarantor?.phone ?? ""}
          and ${r.guarantor?.phone ?? ""} <> '') shared_guarantor`);
   const s = Array.from(stats as unknown as any[])[0] ?? {};
@@ -91,8 +90,8 @@ export async function getReview(id: string) {
       phone: r.phone,
       email: r.email,
       status: r.verificationStatus,
-      nin: r.nin,
-      bvn: r.bvn,
+      idType: r.idType,
+      idNumber: r.idNumber,
       guarantor: r.guarantor ?? null,
       note: r.verificationNote,
       submittedAt: r.verificationSubmittedAt?.toISOString() ?? null,
@@ -101,7 +100,7 @@ export async function getReview(id: string) {
       trustTier: r.trustTierLevel,
       deliveredErrands: Number(s.delivered ?? 0),
     },
-    // Quick red flags for the reviewer: the same NIN/BVN on another account,
+    // Quick red flags for the reviewer: the same ID number on another account,
     // or the same guarantor phone used by other runners.
     flags: {
       otherAccountsWithSameId: Number(s.duplicate_ids ?? 0),

@@ -658,10 +658,11 @@ function vLabel(s){return s==="pending"?"Waiting":s==="rejected"?"Sent back":s==
 function verificationList(){
   api("/verifications?status="+vFilter).then(function(r){
     $("#view").innerHTML=r.runners.length?r.runners.map(function(x){
-      return '<button class="tk" data-id="'+x.id+'"><span class="av" style="background:'+avColor(x.fullName)+'">'+esc(initials(x.fullName))+'</span><div class="grow" style="flex:1;min-width:0"><div class="t" style="font-weight:600">'+esc(x.fullName)+'</div><div class="m muted" style="font-size:12px">'+esc(x.phone)+(x.ninMasked?" · NIN "+esc(x.ninMasked):"")+(x.submittedAt?" · submitted "+ago(x.submittedAt):"")+'</div></div><span class="pillx '+(x.status==="pending"?"p-warn":x.status==="approved"?"p-good":x.status==="rejected"?"p-bad":"p-mute")+'">'+vLabel(x.status)+'</span></button>'}).join(""):'<div class="card"><div class="clear">'+icon("ok")+'Nothing here</div><p class="desc muted">No runners in this list.</p></div>';
+      return '<button class="tk" data-id="'+x.id+'"><span class="av" style="background:'+avColor(x.fullName)+'">'+esc(initials(x.fullName))+'</span><div class="grow" style="flex:1;min-width:0"><div class="t" style="font-weight:600">'+esc(x.fullName)+'</div><div class="m muted" style="font-size:12px">'+esc(x.phone)+(x.idMasked?" · "+esc(x.idType?IDLABEL[x.idType]||x.idType:"ID")+" "+esc(x.idMasked):"")+(x.submittedAt?" · submitted "+ago(x.submittedAt):"")+'</div></div><span class="pillx '+(x.status==="pending"?"p-warn":x.status==="approved"?"p-good":x.status==="rejected"?"p-bad":"p-mute")+'">'+vLabel(x.status)+'</span></button>'}).join(""):'<div class="card"><div class="clear">'+icon("ok")+'Nothing here</div><p class="desc muted">No runners in this list.</p></div>';
     $$(".tk").forEach(function(b){b.onclick=function(){verificationOpen(b.getAttribute("data-id"))}});
   }).catch(fail);
 }
+var IDLABEL={nin:"NIN (National ID)",bvn:"BVN",passport:"International passport",drivers_license:"Driver’s licence"};
 function maskId(v){return v?v.slice(0,3)+" •••• "+v.slice(-3):"—"}
 function verificationOpen(id){
   page="verification";sessionStorage.setItem("gr_admin_page",page);
@@ -669,17 +670,17 @@ function verificationOpen(id){
     var x=r.runner,g=x.guarantor,fl=r.flags,c=$("#content"),st=x.status;c.setAttribute("data-page","verification");
     $$("[data-page]").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-page")==="verification")});
     var flags=[];
-    if(fl.otherAccountsWithSameId)flags.push(fl.otherAccountsWithSameId+(fl.otherAccountsWithSameId===1?" other account uses":" other accounts use")+" the same NIN or BVN");
+    if(fl.otherAccountsWithSameId)flags.push(fl.otherAccountsWithSameId+(fl.otherAccountsWithSameId===1?" other account uses":" other accounts use")+" the same ID number");
     if(fl.otherRunnersWithSameGuarantor)flags.push(fl.otherRunnersWithSameGuarantor+(fl.otherRunnersWithSameGuarantor===1?" other runner lists":" other runners list")+" the same guarantor phone");
     c.innerHTML=head(esc(x.fullName),esc(x.phone)+(x.email?" · "+esc(x.email):"")+" · joined "+new Date(x.joinedAt).toLocaleDateString()+" · "+x.deliveredErrands+" deliveries",'<button class="btn ghost" id="back">Back to list</button>')+
     (flags.length?'<div class="err" style="background:var(--warnbg);color:var(--warn)"><b>Check before approving</b><ul style="margin:6px 0 0 18px;padding:0">'+flags.map(function(t){return '<li>'+esc(t)+'</li>'}).join("")+'</ul></div>':'')+
-    '<div class="grid"><section class="card c6"><h3>Identity</h3><div class="kv"><span>NIN</span><b id="nin">'+esc(maskId(x.nin))+'</b><span>BVN</span><b id="bvn">'+esc(maskId(x.bvn))+'</b></div>'+(x.nin||x.bvn?'<p style="margin:12px 0 0"><button class="btn ghost small" id="show">Show full numbers</button></p>':'')+
-    '<p class="sub" style="margin-top:14px">These are only checked for format. Compare them with what you know about the runner before approving.</p></section>'+
+    '<div class="grid"><section class="card c6"><h3>Identity</h3><div class="kv"><span>ID type</span><b>'+esc(x.idType?IDLABEL[x.idType]||x.idType:"—")+'</b><span>ID number</span><b id="idn">'+esc(maskId(x.idNumber))+'</b></div>'+(x.idNumber?'<p style="margin:12px 0 0"><button class="btn ghost small" id="show">Show full number</button></p>':'')+
+    '<p class="sub" style="margin-top:14px">The number is only checked for format. Compare it with the runner’s name and what you know about them before approving.</p></section>'+
     '<section class="card c6"><h3>Guarantor</h3>'+(g?'<div class="kv"><span>Name</span><b>'+esc(g.fullName)+'</b><span>Phone</span><b>'+esc(g.phone)+'</b><span>Relationship</span><b>'+esc(g.relationship)+'</b></div>':'<p class="muted">No guarantor submitted.</p>')+'</section>'+
     '<section class="card c12"><h3>Decision</h3><p class="sub">Status: <b>'+esc(vLabel(st))+'</b>'+(x.submittedAt?" · submitted "+new Date(x.submittedAt).toLocaleString():"")+(x.reviewedAt&&st!=="pending"?" · reviewed "+new Date(x.reviewedAt).toLocaleString():"")+'</p>'+(x.note&&st==="rejected"?'<p class="muted">Reason sent to the runner: '+esc(x.note)+'</p>':'')+
     (st==="unsubmitted"?'<p class="muted">This runner hasn’t submitted their details yet.</p>':'<textarea class="in" id="why" placeholder="'+(st==="approved"?"Why you are removing this runner’s verification (the runner sees this)":"If you send this back, tell the runner what to fix (the runner sees this)")+'" aria-label="Reason"></textarea><div class="fld">'+(st!=="approved"?'<button class="btn" id="ok">Approve runner</button>':'')+'<button class="btn ghost" id="no">'+(st==="approved"?"Remove verification":"Send back with this reason")+'</button></div>')+'</section></div>';
     $("#back").onclick=function(){verificationPage()};
-    var sh=$("#show");if(sh)sh.onclick=function(){$("#nin").textContent=x.nin||"—";$("#bvn").textContent=x.bvn||"—";sh.hidden=true};
+    var sh=$("#show");if(sh)sh.onclick=function(){$("#idn").textContent=x.idNumber||"—";sh.hidden=true};
     var ok=$("#ok");if(ok)ok.onclick=function(){ok.disabled=true;api("/verifications/"+id+"/approve",{method:"POST"}).then(function(){cache=null;verificationPage()}).catch(function(e){ok.disabled=false;fail(e)})};
     var no=$("#no");if(no)no.onclick=function(){var w=$("#why").value.trim();if(w.length<5){fail(new Error("Write a reason of at least 5 characters"));return}no.disabled=true;api("/verifications/"+id+"/reject",{method:"POST",body:JSON.stringify({reason:w})}).then(function(){cache=null;verificationPage()}).catch(function(e){no.disabled=false;fail(e)})};
   }).catch(fail);

@@ -5,11 +5,25 @@ import { z } from "zod";
 // stay independently editable (see routes/runners.ts header comment).
 const phoneSchema = z.string().regex(/^\+[0-9]{7,15}$/, "Enter a valid phone number");
 
-// NIN is 11 digits, BVN is 11 digits — both purely numeric in Nigeria.
-// This is a format check only; nothing here verifies these against NIMC/
-// banks (see schema.ts's identityVerified comment).
-const ninSchema = z.string().regex(/^\d{11}$/, "NIN must be 11 digits");
-const bvnSchema = z.string().regex(/^\d{11}$/, "BVN must be 11 digits");
+// A runner proves who they are with ONE government ID. Format checks only:
+// nothing here is verified against NIMC, a bank or the issuing agency — staff
+// review the submission (lib/identity-review.ts).
+export const ID_TYPES = ["nin", "bvn", "passport", "drivers_license"] as const;
+export type IdType = (typeof ID_TYPES)[number];
+
+const ID_RULES: Record<IdType, { re: RegExp; message: string }> = {
+  nin: { re: /^\d{11}$/, message: "NIN must be 11 digits" },
+  bvn: { re: /^\d{11}$/, message: "BVN must be 11 digits" },
+  // Nigerian passports are a letter + 8 digits; foreign ones vary (6-9 letters/digits).
+  passport: { re: /^[A-Z0-9]{6,9}$/, message: "Enter the passport number exactly as printed (6 to 9 letters or digits)" },
+  // FRSC licence numbers are letters and digits, 8 to 15 characters.
+  drivers_license: { re: /^[A-Z0-9]{8,15}$/, message: "Enter the licence number exactly as printed (8 to 15 letters or digits)" },
+};
+
+/** Removes spaces and dashes and upper-cases, so "abc 12345-aa" and "ABC12345AA" are the same number. */
+export function normalizeIdNumber(value: string): string {
+  return value.replace(/[\s-]/g, "").toUpperCase();
+}
 
 // People type Nigerian numbers the way they dial them (08012345678), not in
 // +234 form. Normalise the common local shapes to international format
@@ -58,9 +72,12 @@ export type RunnerLoginInput = z.infer<typeof runnerLoginSchema>;
 // Settings screen, any time after signup. A runner can't go online or
 // accept errands until this has been submitted (see routes/runners.ts).
 export const submitVerificationSchema = z.object({
-  nin: ninSchema,
-  bvn: bvnSchema,
+  idType: z.enum(ID_TYPES, { message: "Choose which ID you are using" }),
+  idNumber: z.string().transform(normalizeIdNumber),
   guarantor: guarantorSchema,
+}).superRefine((value, ctx) => {
+  const rule = ID_RULES[value.idType];
+  if (!rule.re.test(value.idNumber)) ctx.addIssue({ code: "custom", path: ["idNumber"], message: rule.message });
 });
 
 export type SubmitVerificationInput = z.infer<typeof submitVerificationSchema>;

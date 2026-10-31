@@ -93,8 +93,8 @@ function toRunner(row: typeof runners.$inferSelect): Runner {
     role: "runner",
     avatarUrl: row.avatarUrl ?? undefined,
     vehicleType: row.vehicleType ?? undefined,
-    nin: row.nin ?? undefined,
-    bvn: row.bvn ?? undefined,
+    idType: (row.idType as "nin" | "bvn" | "passport" | "drivers_license" | null) ?? undefined,
+    idNumber: row.idNumber ?? undefined,
     identityVerified: row.identityVerified,
     verificationStatus: row.verificationStatus,
     verificationNote: row.verificationNote ?? undefined,
@@ -602,7 +602,7 @@ router.get(
   })
 );
 
-// Submits NIN/BVN/guarantor from the Runner app's Settings screen. The
+// Submits one ID (NIN, BVN, passport or driver's licence) and a guarantor from the Runner app's Settings screen. The
 // submission goes to staff review (lib/identity-review.ts): the runner is
 // "pending" until someone approves it in the admin dashboard, and only then
 // does identityVerified turn true and the runner can go online. A rejected
@@ -619,13 +619,23 @@ router.patch(
       throw AppErrors.conflict("Your details are already being reviewed");
     }
 
-    const input = submitVerificationSchema.parse(req.body);
+    // Older app builds still send both numbers (nin + bvn). Accept that by
+    // keeping the NIN (or the BVN if that is all there is), so they keep working
+    // until the runner updates the app.
+    const body = req.body ?? {};
+    const compat =
+      !body.idType && (body.nin || body.bvn)
+        ? { ...body, idType: body.nin ? "nin" : "bvn", idNumber: body.nin ?? body.bvn }
+        : body;
+    const input = submitVerificationSchema.parse(compat);
 
     const [row] = await db
       .update(runners)
       .set({
-        nin: input.nin,
-        bvn: input.bvn,
+        idType: input.idType,
+        idNumber: input.idNumber,
+        nin: null,
+        bvn: null,
         guarantor: input.guarantor,
         identityVerified: false,
         verificationStatus: "pending",

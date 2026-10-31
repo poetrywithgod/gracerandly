@@ -2,7 +2,7 @@
  * CSV downloads for the admin dashboard (refunds, tickets, runners, requesters,
  * disputes, payouts). Spreadsheet-safe: cells that start with = + - @ are
  * prefixed so Excel never runs them as formulas. Runner exports leave out
- * NIN, BVN and bank account numbers on purpose.
+ * ID numbers (NIN, BVN, passport, licence) and bank account numbers on purpose.
  */
 import { sql } from "drizzle-orm";
 import { db } from "../db/client";
