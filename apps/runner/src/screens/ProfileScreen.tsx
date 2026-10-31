@@ -84,6 +84,8 @@ function formatNaira(amount: number): string {
   return `\u20a6${amount.toLocaleString("en-NG")}`;
 }
 
+const ID_LABELS = { nin: "NIN", bvn: "BVN", passport: "Passport", drivers_license: "Driver's licence" } as const;
+
 function maskId(value: string): string {
   return `${"•".repeat(Math.max(value.length - 4, 0))}${value.slice(-4)}`;
 }
@@ -392,11 +394,11 @@ export default function ProfileScreen() {
                       ? "We'll notify you when you're approved"
                       : user.verificationStatus === "rejected"
                         ? user.verificationNote ?? "Fix your details and submit again"
-                        : "Submit your NIN, BVN and a guarantor to go online"}
+                        : "Submit an ID (NIN, BVN, passport or licence) and a guarantor to go online"}
                   </Text>
                 ) : (
                   <Text style={styles.rowHint}>
-                    NIN {maskId(user.nin ?? "")} · BVN {maskId(user.bvn ?? "")}
+                    {ID_LABELS[user.idType ?? "nin"]} {maskId(user.idNumber ?? "")}
                   </Text>
                 )}
               </View>

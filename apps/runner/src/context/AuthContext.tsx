@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import * as SecureStore from "expo-secure-store";
-import type { Runner, VehicleType } from "@gracerandly/shared-types";
+import type { IdType, Runner, VehicleType } from "@gracerandly/shared-types";
 import { apiFetch, ApiError } from "../lib/apiClient";
 import { unregisterForPush } from "../lib/push";
 
@@ -21,8 +21,8 @@ export interface SignUpDetails {
 }
 
 export interface VerificationDetails {
-  nin: string;
-  bvn: string;
+  idType: IdType;
+  idNumber: string;
   guarantor: { fullName: string; phone: string; relationship: string };
 }
 
@@ -57,7 +57,7 @@ interface AuthContextValue {
   signIn: (credentials: AuthCredentials) => Promise<void>;
   signUp: (details: SignUpDetails) => Promise<void>;
   signOut: () => Promise<void>;
-  /** Submits NIN/BVN/guarantor from Settings — see routes/runners.ts's
+  /** Submits one ID (NIN, BVN, passport or licence) and a guarantor from Settings — see routes/runners.ts's
    * PATCH /me/verification. Required before setOnlineStatus(true) or
    * accepting an errand will succeed. */
   submitVerification: (details: VerificationDetails) => Promise<void>;

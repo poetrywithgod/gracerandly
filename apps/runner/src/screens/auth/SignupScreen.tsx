@@ -271,7 +271,7 @@ export default function SignupScreen({ navigation }: Props) {
             />
 
             <Text style={styles.hint}>
-              You&apos;ll verify your NIN, BVN and a guarantor from Settings after signing up —
+              You&apos;ll verify your identity (one ID: NIN, BVN, passport or driver's licence) and a guarantor from Settings after signing up —
               that&apos;s required before you can go online or accept errands.
             </Text>
 

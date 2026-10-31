@@ -9,6 +9,8 @@ import { Clock, ShieldCheck } from "lucide-react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { getTheme } from "@gracerandly/theme";
 import TextField from "../components/TextField";
+import PillSelect from "../components/PillSelect";
+import type { IdType } from "@gracerandly/shared-types";
 import Button from "../components/Button";
 import { useAuth } from "../context/AuthContext";
 import { ApiError } from "../lib/apiClient";
@@ -18,16 +20,16 @@ const theme = getTheme("light");
 
 type Props = NativeStackScreenProps<MainStackParamList, "Verification">;
 
-type FieldKey = "nin" | "bvn" | "guarantorName" | "guarantorPhone" | "guarantorRelationship";
+type FieldKey = "idType" | "idNumber" | "guarantorName" | "guarantorPhone" | "guarantorRelationship";
 type FieldErrors = Partial<Record<FieldKey, string>>;
 
 // Top-to-bottom, so "first error" means the one highest on the screen.
-const FIELD_ORDER: FieldKey[] = ["nin", "bvn", "guarantorName", "guarantorPhone", "guarantorRelationship"];
+const FIELD_ORDER: FieldKey[] = ["idType", "idNumber", "guarantorName", "guarantorPhone", "guarantorRelationship"];
 
 // Server-side path -> the input it belongs to (see errorHandler's `fields`).
 const SERVER_FIELD_MAP: Record<string, FieldKey> = {
-  nin: "nin",
-  bvn: "bvn",
+  idType: "idType",
+  idNumber: "idNumber",
   "guarantor.fullName": "guarantorName",
   "guarantor.phone": "guarantorPhone",
   "guarantor.relationship": "guarantorRelationship",
@@ -43,12 +45,32 @@ function normalizeNigerianPhone(value: string): string {
   return compact;
 }
 
-// NIN/BVN are only format-checked (11 digits) — nothing is verified against
-// NIMC or a bank yet, so placeholder numbers are fine while testing.
+// The runner gives ONE government ID. Format-checked only — nothing is verified
+// against NIMC, a bank or the issuing agency; staff review each submission.
+const ID_OPTIONS: { value: IdType; label: string }[] = [
+  { value: "nin", label: "NIN" },
+  { value: "bvn", label: "BVN" },
+  { value: "passport", label: "Passport" },
+  { value: "drivers_license", label: "Driver's licence" },
+];
+
+const ID_FIELDS: Record<IdType, { label: string; placeholder: string; digitsOnly: boolean; maxLength: number; pattern: RegExp; error: string }> = {
+  nin: { label: "NIN", placeholder: "11-digit National ID number", digitsOnly: true, maxLength: 11, pattern: /^\d{11}$/, error: "NIN must be exactly 11 digits" },
+  bvn: { label: "BVN", placeholder: "11-digit Bank Verification Number", digitsOnly: true, maxLength: 11, pattern: /^\d{11}$/, error: "BVN must be exactly 11 digits" },
+  passport: { label: "Passport number", placeholder: "As printed in your passport", digitsOnly: false, maxLength: 12, pattern: /^[A-Z0-9]{6,9}$/, error: "Enter the passport number exactly as printed (6 to 9 letters or digits)" },
+  drivers_license: { label: "Driver's licence number", placeholder: "As printed on your licence", digitsOnly: false, maxLength: 20, pattern: /^[A-Z0-9]{8,15}$/, error: "Enter the licence number exactly as printed (8 to 15 letters or digits)" },
+};
+
+/** Spaces and dashes don't count, and case doesn't matter. */
+function normalizeIdNumber(value: string): string {
+  return value.replace(/[\s-]/g, "").toUpperCase();
+}
+
 function validate(values: Record<FieldKey, string>): FieldErrors {
   const errors: FieldErrors = {};
-  if (!/^\d{11}$/.test(values.nin.trim())) errors.nin = "NIN must be exactly 11 digits";
-  if (!/^\d{11}$/.test(values.bvn.trim())) errors.bvn = "BVN must be exactly 11 digits";
+  const idType = values.idType as IdType | "";
+  if (!idType) errors.idType = "Choose which ID you are using";
+  else if (!ID_FIELDS[idType].pattern.test(normalizeIdNumber(values.idNumber))) errors.idNumber = ID_FIELDS[idType].error;
   if (values.guarantorName.trim().length < 2) errors.guarantorName = "Enter your guarantor's full name";
   if (!/^\+[0-9]{7,15}$/.test(normalizeNigerianPhone(values.guarantorPhone))) {
     errors.guarantorPhone = "Enter a valid phone number, e.g. 08012345678";
@@ -69,8 +91,8 @@ export default function VerificationScreen({ navigation }: Props) {
   }, []);
 
   const [values, setValues] = useState<Record<FieldKey, string>>({
-    nin: "",
-    bvn: "",
+    idType: "",
+    idNumber: "",
     guarantorName: "",
     guarantorPhone: "",
     guarantorRelationship: "",
@@ -116,8 +138,8 @@ export default function VerificationScreen({ navigation }: Props) {
 
     try {
       await submitVerification({
-        nin: values.nin.trim(),
-        bvn: values.bvn.trim(),
+        idType: values.idType as IdType,
+        idNumber: normalizeIdNumber(values.idNumber),
         guarantor: {
           fullName: values.guarantorName.trim(),
           phone: normalizeNigerianPhone(values.guarantorPhone),
@@ -186,28 +208,33 @@ export default function VerificationScreen({ navigation }: Props) {
       </Text>
 
       <Text style={styles.sectionLabel}>Identity verification</Text>
-      <View onLayout={trackLayout("nin")}>
-        <TextField
-          label="NIN"
-          value={values.nin}
-          onChangeText={(t) => setValue("nin", t.replace(/\D/g, ""))}
-          placeholder="11-digit National ID number"
-          keyboardType="number-pad"
-          maxLength={11}
-          error={errors.nin}
+      <Text style={styles.intro}>Give us just one of these. Pick the one you have.</Text>
+      <View onLayout={trackLayout("idType")}>
+        <PillSelect
+          label="ID type"
+          options={ID_OPTIONS}
+          value={(values.idType || null) as IdType | null}
+          onChange={(next) => setValues((prev) => ({ ...prev, idType: next, idNumber: "" }))}
+          error={errors.idType}
         />
       </View>
-      <View onLayout={trackLayout("bvn")}>
-        <TextField
-          label="BVN"
-          value={values.bvn}
-          onChangeText={(t) => setValue("bvn", t.replace(/\D/g, ""))}
-          placeholder="11-digit Bank Verification Number"
-          keyboardType="number-pad"
-          maxLength={11}
-          error={errors.bvn}
-        />
-      </View>
+      {values.idType ? (
+        <View onLayout={trackLayout("idNumber")}>
+          <TextField
+            label={ID_FIELDS[values.idType as IdType].label}
+            value={values.idNumber}
+            onChangeText={(t) => {
+              const cfg = ID_FIELDS[values.idType as IdType];
+              setValue("idNumber", cfg.digitsOnly ? t.replace(/\D/g, "") : t.toUpperCase());
+            }}
+            placeholder={ID_FIELDS[values.idType as IdType].placeholder}
+            keyboardType={ID_FIELDS[values.idType as IdType].digitsOnly ? "number-pad" : "default"}
+            autoCapitalize="characters"
+            maxLength={ID_FIELDS[values.idType as IdType].maxLength}
+            error={errors.idNumber}
+          />
+        </View>
+      ) : null}
 
       <Text style={styles.sectionLabel}>Guarantor</Text>
       <View onLayout={trackLayout("guarantorName")}>
