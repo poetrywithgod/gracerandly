@@ -18,6 +18,8 @@ export interface SignUpDetails {
   email?: string;
   password: string;
   referralCode?: string;
+  acceptedTerms: boolean;
+  acceptedPrivacy: boolean;
 }
 
 export interface VerificationDetails {

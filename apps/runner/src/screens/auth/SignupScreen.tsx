@@ -25,6 +25,7 @@ import GlassCard from "../../components/GlassCard";
 import FloatingLabelInput from "../../components/FloatingLabelInput";
 import PhoneField, { DEFAULT_COUNTRY, type Country } from "../../components/PhoneField";
 import Button from "../../components/Button";
+import LegalConsent from "../../components/LegalConsent";
 import { useAuth } from "../../context/AuthContext";
 import { ApiError } from "../../lib/apiClient";
 import type { AuthStackParamList } from "../../navigation/types";
@@ -59,6 +60,8 @@ export default function SignupScreen({ navigation }: Props) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [referralCode, setReferralCode] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
 
   const [submitted, setSubmitted] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -115,6 +118,8 @@ export default function SignupScreen({ navigation }: Props) {
     localPhone.length > 0 &&
     password.length > 0 &&
     confirmPassword.length > 0 &&
+    acceptedTerms &&
+    acceptedPrivacy &&
     !isLoading;
 
   const isFormValid = useCallback(() => {
@@ -123,7 +128,9 @@ export default function SignupScreen({ navigation }: Props) {
       localPhone.length >= MIN_LOCAL_PHONE_DIGITS &&
       (!email.trim() || EMAIL_REGEX.test(email.trim())) &&
       password.length >= MIN_PASSWORD_LENGTH &&
-      confirmPassword === password
+      confirmPassword === password &&
+      acceptedTerms &&
+      acceptedPrivacy
     );
   }, [fullName, localPhone, email, password, confirmPassword]);
 
@@ -140,6 +147,8 @@ export default function SignupScreen({ navigation }: Props) {
         email: email.trim() || undefined,
         password,
         referralCode: referralCode.trim() || undefined,
+        acceptedTerms,
+        acceptedPrivacy,
       });
     } catch (err) {
       if (err instanceof ApiError && err.fields) {
@@ -155,7 +164,7 @@ export default function SignupScreen({ navigation }: Props) {
       }
       setFormError(err instanceof Error ? err.message : "Sign up failed");
     }
-  }, [isFormValid, signUp, fullName, country, localPhone, email, password, referralCode]);
+  }, [isFormValid, signUp, fullName, country, localPhone, email, password, referralCode, acceptedTerms, acceptedPrivacy]);
 
   const handleGoToLogin = useCallback(() => {
     navigation.navigate("Login");
@@ -274,6 +283,13 @@ export default function SignupScreen({ navigation }: Props) {
               You&apos;ll verify your identity (one ID: NIN, BVN, passport or driver's licence) and a guarantor from Settings after signing up —
               that&apos;s required before you can go online or accept errands.
             </Text>
+
+            <LegalConsent
+              acceptedTerms={acceptedTerms}
+              acceptedPrivacy={acceptedPrivacy}
+              onChangeTerms={setAcceptedTerms}
+              onChangePrivacy={setAcceptedPrivacy}
+            />
 
             {formError ? <Text style={styles.formError}>{formError}</Text> : null}
 
