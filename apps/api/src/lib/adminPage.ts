@@ -176,7 +176,7 @@ table{width:100%;border-collapse:collapse;font-size:13px;background:#fff}
 th,td{padding:9px 14px;text-align:left;border-bottom:1px solid var(--line2);white-space:nowrap}
 th{font-weight:500;color:var(--muted);background:var(--panel);position:sticky;top:0}
 td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
-.banner{background:var(--badbg);color:var(--bad);border-radius:12px;padding:10px 14px;margin:12px 28px 0;display:flex;gap:10px;align-items:center;font-weight:500}.banner span{flex:1}
+.banner{background:var(--badbg);color:var(--bad);border-radius:12px;padding:10px 14px;margin:12px 28px 0;display:flex;gap:10px;align-items:center;font-weight:500}.banner span{flex:1}.banner[hidden]{display:none}
 .setrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 16px;padding:14px 0;border-top:1px solid var(--line)}.setrow:first-of-type{border-top:0}.setrow .ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.setrow input{border:0;background:#fff;border-radius:12px;padding:9px 12px;box-shadow:inset 0 0 0 1px var(--line);width:130px}.setrow input.wide{width:320px;max-width:100%}.setrow .ok{color:var(--good);font-size:12px}
 .err{background:var(--badbg);color:var(--bad);border-radius:12px;padding:10px 14px;margin:0 0 14px}
 .tk{display:flex;gap:12px;align-items:center;padding:14px 18px;background:#fff;border-radius:16px;margin-bottom:10px;cursor:pointer;border:0;width:100%;text-align:left}
@@ -213,6 +213,39 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .login .ok{background:#e6f4ea;color:#1e6b34;border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:14px}
 @media (max-width:820px){.split{grid-template-columns:1fr;grid-template-rows:200px 1fr;min-height:100vh}.cap,.dots{display:none}.artbrand{top:18px;left:18px}.formside{align-items:flex-start;padding-top:28px}}
 @media (prefers-reduced-motion:reduce){.slide,.slide .pic,.cap>div,.dots i{transition:none}.slide.on .pic{transform:scale(1.04)}}
+.shell{transition:grid-template-columns .25s ease}
+.shell.mini{grid-template-columns:76px minmax(0,1fr)}
+.side{overflow-x:hidden}
+.sidetop{display:flex;align-items:center;justify-content:space-between;padding-right:14px}
+.sidetop .brand{padding-bottom:22px}
+.collapse{all:unset;box-sizing:border-box;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;margin-bottom:22px;flex:none}
+.collapse:hover{background:#fff;color:var(--deep)}.collapse:focus-visible{outline:2px solid var(--rose)}
+.collapse svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:transform .25s}
+.shell.mini .collapse svg{transform:rotate(180deg)}
+.shell.mini .sidetop{flex-direction:column;padding:0;gap:6px}
+.shell.mini .brand{padding:0;font-size:0;gap:0}.shell.mini .brand small{display:none}.shell.mini .brand .logo{margin:0 auto}
+.shell.mini .sidetop .brand{padding-bottom:0}
+.shell.mini .navh,.shell.mini .sidecard{display:none}
+.shell.mini .nav button{font-size:0;gap:0;justify-content:center;padding:12px 0}
+.shell.mini .nav button svg{width:20px;height:20px}
+.shell.mini .nav .badge{position:absolute;top:6px;right:14px;font-size:10px;min-width:16px;padding:1px 5px}
+.shell.mini .nav button.on{background:#fff;border-radius:14px;margin:0 10px;width:calc(100% - 20px)}.shell.mini .nav button.on:before{display:none}
+.scrim{display:none}
+.menub{display:none}
+@media (max-width:860px){
+  .shell.mini{grid-template-columns:1fr}
+  .collapse{display:none}.sidetop{padding:0}.sidetop .brand{padding-bottom:0}
+  .side{padding:8px 6px}
+  .menub{display:flex}
+  .side .nav,.side .navh{display:none}
+  .side.open{position:fixed;z-index:60;top:0;left:0;bottom:0;width:270px;max-width:84vw;height:auto;margin:0;border-radius:0 22px 22px 0;flex-direction:column;flex-wrap:nowrap;align-items:stretch;padding:18px 0;box-shadow:0 20px 60px rgba(30,12,36,.35)}
+  .side.open .nav{display:flex;flex-direction:column;flex-wrap:nowrap;flex:none}.side.open .navh{display:block}.side.open .sidecard{display:block}
+  .side.open .nav button{padding:11px 22px;width:100%}.side.open .nav button.on{background:transparent;border-radius:0}.side.open .nav button.on:before{display:block}
+  .side.open .collapse{display:flex}.side.open .collapse svg{transform:none}
+  .scrim.on{display:block;position:fixed;inset:0;z-index:55;background:rgba(30,12,36,.45)}
+}
+@media (prefers-reduced-motion:reduce){.shell,.collapse svg{transition:none}}
+@media (display-mode:standalone){body{padding-top:env(safe-area-inset-top)}}
 @media (max-width:1180px){.c3{grid-column:span 6}.c4{grid-column:span 6}.c5{grid-column:span 6}.c6{grid-column:span 12}.c8{grid-column:span 12}}
 @media (max-width:860px){
   .shell{grid-template-columns:1fr;margin:0;border-radius:0;padding:10px}
@@ -285,6 +318,7 @@ var IC={
  parcel:'<path d="M16.5 9.4l-9-5.2M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z"/><path d="M3.3 7L12 12l8.7-5M12 22V12"/>',
  miscellaneous:'<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>'
 };
+IC.chevl='<path d="m15 18-6-6 6-6"/>';IC.menu='<path d="M4 6h16M4 12h16M4 18h16"/>';
 var icon=function(n,cls){return '<svg class="'+(cls||"ico")+'" viewBox="0 0 24 24" aria-hidden="true">'+IC[n]+'</svg>'};
 var LOGO='<img class="logo" src="__LOGO__" width="36" height="36" alt="Gracerandly">';
 
@@ -546,11 +580,12 @@ function renderReset(email,devCode){
   };
   $("#rgo").onclick=go;$$(".login input").forEach(function(i){i.onkeydown=function(e){if(e.key==="Enter")go()}});$("#rback").onclick=function(){renderLogin()};
 }
+function sideMini(){try{return localStorage.getItem("gr_admin_mini")==="1"}catch(e){return false}}
 function renderShell(){
   var nav=NAV.slice();if(me.role==="owner"){nav.push(["team","Team","users"],["audit","Audit log","scroll"],["settings","Settings","gear"])}
-  $("#app").innerHTML='<div class="shell"><aside class="side"><div class="brand">'+LOGO+'Gracerandly<small>admin</small></div>'+
-  '<div class="navh">Menu</div><ul class="nav">'+nav.map(function(n){return '<li><button data-page="'+n[0]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="safety"?'<span class="badge red" id="b-safety" hidden></span>':n[0]==="disputes"?'<span class="badge red" id="b-disputes" hidden></span>':n[0]==="payouts"?'<span class="badge red" id="b-payouts" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
-  '<div class="navh" style="margin-top:22px">General</div><ul class="nav"><li><button data-page="account">'+icon("user")+'My account</button></li><li><button id="refresh">'+icon("refresh")+'Refresh data</button></li><li><button id="out">'+icon("out")+'Sign out</button></li></ul>'+
+  $("#app").innerHTML='<div class="scrim" id="scrim"></div><div class="shell'+(sideMini()?' mini':'')+'" id="shell"><aside class="side" id="side"><div class="sidetop"><div class="brand">'+LOGO+'Gracerandly<small>admin</small></div><button class="collapse" id="collapse" aria-label="Collapse menu" title="Collapse menu">'+icon("chevl")+'</button><button class="collapse menub" id="menub" aria-label="Open menu">'+icon("menu")+'</button></div>'+
+  '<div class="navh">Menu</div><ul class="nav">'+nav.map(function(n){return '<li><button data-page="'+n[0]+'" title="'+n[1]+'" aria-label="'+n[1]+'">'+icon(n[2])+n[1]+(n[0]==="verification"?'<span class="badge" id="b-verification" hidden></span>':n[0]==="safety"?'<span class="badge red" id="b-safety" hidden></span>':n[0]==="disputes"?'<span class="badge red" id="b-disputes" hidden></span>':n[0]==="payouts"?'<span class="badge red" id="b-payouts" hidden></span>':n[0]==="support"?'<span class="badge" id="b-support" hidden></span>':n[0]==="refunds"?'<span class="badge red" id="b-refunds" hidden></span>':'')+'</button></li>'}).join("")+'</ul>'+
+  '<div class="navh" style="margin-top:22px">General</div><ul class="nav"><li><button data-page="account" title="My account" aria-label="My account">'+icon("user")+'My account</button></li><li><button id="refresh" title="Refresh data" aria-label="Refresh data">'+icon("refresh")+'Refresh data</button></li><li><button id="out" title="Sign out" aria-label="Sign out">'+icon("out")+'Sign out</button></li></ul>'+
   '<div class="sidecard"><h4>Daily numbers</h4><p>Errands, money and sign-ups for every day, ready for a spreadsheet.</p><button id="csv">'+icon("down")+'Download CSV</button></div></aside>'+
   '<div class="main"><header class="top"><div class="search"><span>'+icon("search")+'</span><input id="q" type="search" placeholder="Search errands, tickets, people" aria-label="Search" autocomplete="off"><span class="kbd">Ctrl K</span><div class="results" id="sr" hidden></div></div>'+
   '<div class="topr"><button class="circ" id="mailb" aria-label="Open support">'+icon("mail")+'</button><button class="circ" id="bellb" aria-label="Things that need attention">'+icon("bell")+'<span class="dot" id="bell-n" hidden></span></button><div class="me"><div class="avatar" aria-hidden="true">'+esc(initials(me.fullName))+'</div><div><b>'+esc(me.fullName)+'</b><span>'+esc(ROLELBL[me.role]||me.role)+'</span></div></div><div class="pop" id="pop" hidden></div></div></header>'+
@@ -558,7 +593,15 @@ function renderShell(){
   $("#content").addEventListener("click",function(e){var b=e.target.closest("[data-export]");if(!b)return;b.disabled=true;downloadExport(b.getAttribute("data-export")).then(function(){b.disabled=false}).catch(function(er){b.disabled=false;fail(er)})});
   $("#bannerx").onclick=function(){$("#banner").hidden=true};
   if(!autoTimer)autoTimer=setInterval(autoRefresh,30000);
-  $$("[data-page]").forEach(function(b){b.onclick=function(){go(b.getAttribute("data-page"))}});
+  var closeDrawer=function(){$("#side").classList.remove("open");$("#scrim").classList.remove("on")};
+  $("#collapse").onclick=function(){
+    if($("#side").classList.contains("open"))return closeDrawer();
+    var m=$("#shell").classList.toggle("mini");try{localStorage.setItem("gr_admin_mini",m?"1":"0")}catch(e){}
+    $("#collapse").setAttribute("aria-label",m?"Expand menu":"Collapse menu");$("#collapse").title=m?"Expand menu":"Collapse menu";
+  };
+  $("#menub").onclick=function(){$("#side").classList.add("open");$("#scrim").classList.add("on")};
+  $("#scrim").onclick=closeDrawer;
+  $$("[data-page]").forEach(function(b){b.onclick=function(){closeDrawer();go(b.getAttribute("data-page"))}});
   $("#out").onclick=function(){sessionStorage.removeItem("gr_admin_token");token="";me=null;cache=null;renderLogin()};
   $("#refresh").onclick=function(){cache=null;route(true)};
   $("#csv").onclick=downloadCsv;
@@ -1114,15 +1157,19 @@ function start(){
   if(me)return go();
   api("/auth/me").then(function(r){me=r.admin;go()}).catch(function(){})
 }
+if("serviceWorker" in navigator&&(location.protocol==="https:"||location.hostname==="localhost")){window.addEventListener("load",function(){navigator.serviceWorker.register("/admin/sw.js",{scope:"/admin/"}).catch(function(){})})}
 start();
 })();
 `;
 
 export const ADMIN_PAGE =
   '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
-  '<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">' +
+  '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex">' +
   "<title>Gracerandly admin</title>" +
   '<link rel="icon" type="image/png" href="data:image/png;base64,' + FAVICON_PNG + '">' +
+  '<link rel="manifest" href="/admin/manifest.webmanifest"><meta name="theme-color" content="#502D55">' +
+  '<link rel="apple-touch-icon" href="/admin/icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">' +
+  '<meta name="apple-mobile-web-app-title" content="GR Admin"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">' +
   '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
   '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap">' +
   "<style>" +
@@ -1135,4 +1182,4 @@ export const ADMIN_PAGE =
 
 /** Content-Security-Policy for the page above: inline code only, Google Fonts for Poppins, and same-origin API calls. */
 export const ADMIN_PAGE_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'";
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'";

@@ -29,6 +29,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { errands, refunds } from "../db/schema";
 import { dailyCsv, getAnalytics } from "../lib/analytics";
+import { ADMIN_MANIFEST, ADMIN_SW, ICON_192, ICON_512 } from "../lib/admin-pwa";
 import { LOGIN_ART_DIR } from "../lib/login-art";
 import { ADMIN_PAGE, ADMIN_PAGE_CSP } from "../lib/adminPage";
 import { adminSearch, getInsights } from "../lib/insights";
@@ -234,6 +235,26 @@ router.get(
 );
 
 // The page itself is just a shell; it holds no data and needs no key to load.
+// Install-as-an-app files. Public (they hold nothing private) and cached lightly.
+router.get("/manifest.webmanifest", (_req, res) => {
+  if (dashboardOff()) return void res.status(404).send("Not found");
+  res.type("application/manifest+json").setHeader("Cache-Control", "public, max-age=3600");
+  res.send(ADMIN_MANIFEST);
+});
+router.get("/sw.js", (_req, res) => {
+  if (dashboardOff()) return void res.status(404).send("Not found");
+  res.type("application/javascript").setHeader("Cache-Control", "no-cache");
+  res.setHeader("Service-Worker-Allowed", "/admin/");
+  res.send(ADMIN_SW);
+});
+for (const [file, b64] of [["icon-192.png", ICON_192], ["icon-512.png", ICON_512]] as const) {
+  const buf = Buffer.from(b64, "base64");
+  router.get("/" + file, (_req, res) => {
+    res.type("image/png").setHeader("Cache-Control", "public, max-age=86400");
+    res.send(buf);
+  });
+}
+
 router.get(["/", "/support"], (_req, res) => {
   if (dashboardOff()) {
     res.status(404).send("Not found");
