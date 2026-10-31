@@ -19,6 +19,7 @@ import FloatingLabelInput from "../../components/FloatingLabelInput";
 import PhoneField, { DEFAULT_COUNTRY, type Country } from "../../components/PhoneField";
 import GenderSelect from "../../components/GenderSelect";
 import Button from "../../components/Button";
+import LegalConsent from "../../components/LegalConsent";
 import { useAuth } from "../../context/AuthContext";
 import { ApiError } from "../../lib/apiClient";
 import type { AuthStackParamList } from "../../navigation/types";
@@ -55,6 +56,8 @@ export default function SignupScreen({ navigation }: Props) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [referralCode, setReferralCode] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
 
   const [submitted, setSubmitted] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -118,6 +121,8 @@ export default function SignupScreen({ navigation }: Props) {
     !!gender &&
     password.length > 0 &&
     confirmPassword.length > 0 &&
+    acceptedTerms &&
+    acceptedPrivacy &&
     !isLoading;
 
   const isFormValid = useCallback(() => {
@@ -127,9 +132,11 @@ export default function SignupScreen({ navigation }: Props) {
       (!email.trim() || EMAIL_REGEX.test(email.trim())) &&
       !!gender &&
       password.length >= MIN_PASSWORD_LENGTH &&
-      confirmPassword === password
+      confirmPassword === password &&
+      acceptedTerms &&
+      acceptedPrivacy
     );
-  }, [fullName, localPhone, email, gender, password, confirmPassword]);
+  }, [fullName, localPhone, email, gender, password, confirmPassword, acceptedTerms, acceptedPrivacy]);
 
   const handleSignup = useCallback(async () => {
     setSubmitted(true);
@@ -144,6 +151,8 @@ export default function SignupScreen({ navigation }: Props) {
         email: email.trim() || undefined,
         password,
         referralCode: referralCode.trim() || undefined,
+        acceptedTerms,
+        acceptedPrivacy,
         gender,
       });
       // On success, AuthContext flips isAuthenticated and RootNavigator
@@ -162,7 +171,7 @@ export default function SignupScreen({ navigation }: Props) {
       }
       setFormError(err instanceof Error ? err.message : "Sign up failed");
     }
-  }, [isFormValid, signUp, fullName, country, localPhone, email, password, gender, referralCode]);
+  }, [isFormValid, signUp, fullName, country, localPhone, email, password, gender, referralCode, acceptedTerms, acceptedPrivacy]);
 
   const handleGoToLogin = useCallback(() => {
     navigation.navigate("Login");
@@ -285,6 +294,13 @@ export default function SignupScreen({ navigation }: Props) {
               returnKeyType="done"
               onSubmitEditing={handleSignup}
               error={confirmPasswordError}
+            />
+
+            <LegalConsent
+              acceptedTerms={acceptedTerms}
+              acceptedPrivacy={acceptedPrivacy}
+              onChangeTerms={setAcceptedTerms}
+              onChangePrivacy={setAcceptedPrivacy}
             />
 
             {formError ? <Text style={styles.formError}>{formError}</Text> : null}

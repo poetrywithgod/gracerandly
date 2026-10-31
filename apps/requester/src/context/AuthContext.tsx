@@ -19,6 +19,8 @@ export interface SignUpDetails {
   password: string;
   referralCode?: string;
   gender: Gender;
+  acceptedTerms: boolean;
+  acceptedPrivacy: boolean;
 }
 
 export interface UpdateProfileDetails {
