@@ -57,6 +57,8 @@ export const runnerSignupSchema = z.object({
   password: z.string().min(6, "Password must be at least 6 characters"),
   // Someone else's referral code, typed at signup (checked in the route).
   referralCode: z.string().trim().max(20).optional(),
+  acceptedTerms: z.literal(true, { message: "Please agree to the Terms and Conditions to create an account" }),
+  acceptedPrivacy: z.literal(true, { message: "Please agree to the Privacy Policy to create an account" }),
 });
 
 export type RunnerSignupInput = z.infer<typeof runnerSignupSchema>;

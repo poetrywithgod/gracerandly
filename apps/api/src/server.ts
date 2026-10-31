@@ -15,6 +15,7 @@ import pushRouter from "./routes/push";
 import recurringRouter from "./routes/recurring";
 import internalRouter from "./routes/internal";
 import adminRouter from "./routes/admin";
+import { LEGAL_CSP, privacyPage, termsPage } from "./lib/legal";
 import { requesterSupportRouter, runnerSupportRouter } from "./routes/support";
 import { errorHandler } from "./middleware/errorHandler";
 import { attachChatServer } from "./lib/chat-server";
@@ -74,6 +75,15 @@ app.use(
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "gracerandly-api", timestamp: new Date().toISOString() });
 });
+
+// Public legal pages, linked from the apps' signup screens and store listings.
+const sendLegal = (render: () => string) => (_req: express.Request, res: express.Response) => {
+  res.setHeader("Content-Security-Policy", LEGAL_CSP);
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.type("html").send(render());
+};
+app.get(["/legal/privacy", "/privacy"], sendLegal(privacyPage));
+app.get(["/legal/terms", "/terms"], sendLegal(termsPage));
 
 app.use("/auth", authRouter);
 app.use("/errands", errandsRouter);

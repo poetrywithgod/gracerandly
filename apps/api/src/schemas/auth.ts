@@ -14,6 +14,8 @@ export const signupSchema = z.object({
   gender: z.enum(["female", "male", "unspecified"]),
   // Someone else's referral code, typed at signup (checked in the route).
   referralCode: z.string().trim().max(20).optional(),
+  acceptedTerms: z.literal(true, { message: "Please agree to the Terms and Conditions to create an account" }),
+  acceptedPrivacy: z.literal(true, { message: "Please agree to the Privacy Policy to create an account" }),
 });
 
 export type SignupInput = z.infer<typeof signupSchema>;

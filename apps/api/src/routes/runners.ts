@@ -54,6 +54,7 @@ import {
 import { notifyRequesterOfProgress } from "../lib/errand-notify";
 import { dropErrandByRunner } from "../lib/cancellation";
 import { startRunnerPayout } from "../lib/payouts";
+import { LEGAL_VERSION } from "../lib/legal";
 import { loginGuard, limitByIp } from "../lib/attempts";
 import { requestPasswordReset, confirmPasswordReset, setNewPassword } from "../lib/password-reset";
 import { forgotPasswordSchema, resetPasswordSchema } from "../schemas/auth";
@@ -250,6 +251,8 @@ router.post(
         phone: input.phone,
         email: input.email,
         passwordHash,
+        legalAcceptedAt: new Date(),
+        legalVersion: LEGAL_VERSION,
       })
       .returning();
 

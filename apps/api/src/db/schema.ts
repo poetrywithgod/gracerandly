@@ -31,6 +31,9 @@ export const requesters = pgTable("requesters", {
   phone: text("phone").notNull().unique(),
   email: text("email").unique(),
   gender: genderEnum("gender").notNull(),
+  // When they ticked "I agree" to the Terms and Privacy Policy at signup, and which version of the texts (lib/legal.ts).
+  legalAcceptedAt: timestamp("legal_accepted_at", { withTimezone: true }),
+  legalVersion: text("legal_version"),
   passwordHash: text("password_hash").notNull(),
   // Code other people type at signup to credit this account with a referral
   // (see lib/referrals.ts). Created the first time it's needed.
@@ -105,6 +108,8 @@ export const runners = pgTable("runners", {
   bvn: text("bvn"),
   idType: text("id_type"), // "nin" | "bvn" | "passport" | "drivers_license"
   idNumber: text("id_number"),
+  legalAcceptedAt: timestamp("legal_accepted_at", { withTimezone: true }),
+  legalVersion: text("legal_version"),
   // identityVerified is now the *result* of staff review, not of submitting
   // the form: it is true only while verificationStatus is "approved" (see
   // lib/identity-review.ts). Submitting moves unsubmitted/rejected -> pending;

@@ -18,6 +18,7 @@ import { assertRowNotSuspended } from "../lib/suspension";
 import { AppErrors } from "../lib/errors";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
+import { LEGAL_VERSION } from "../lib/legal";
 import { loginGuard, limitByIp } from "../lib/attempts";
 import { requestPasswordReset, confirmPasswordReset, setNewPassword } from "../lib/password-reset";
 import { requestVerificationCode, confirmVerificationCode } from "../lib/verification";
@@ -96,6 +97,8 @@ router.post(
         email: input.email,
         gender: input.gender,
         passwordHash,
+        legalAcceptedAt: new Date(),
+        legalVersion: LEGAL_VERSION,
       })
       .returning();
 
