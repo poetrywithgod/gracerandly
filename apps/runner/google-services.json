@@ -1,21 +1,21 @@
 {
   "project_info": {
-    "project_number": "170954633769",
-    "project_id": "gracerandly",
-    "storage_bucket": "gracerandly.firebasestorage.app"
+    "project_number": "280666776956",
+    "project_id": "gen-lang-client-0171594662",
+    "storage_bucket": "gen-lang-client-0171594662.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:170954633769:android:c67eab2c049d9d5ebae238",
+        "mobilesdk_app_id": "1:280666776956:android:f508bdb661f6b389d430f9",
         "android_client_info": {
-          "package_name": "com.anonymous.gracerandlyrunner"
+          "package_name": "com.cyberscribe.gracerandlyrunner"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAXzjwsswoqthU2uHQ2Cu1a9hmCu7LkAeE"
+          "current_key": "AIzaSyAhauQPcDz5eEP3bKlWSweWpz655EyjhTI"
         }
       ],
       "services": {
