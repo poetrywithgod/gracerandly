@@ -216,7 +216,8 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .shell{transition:grid-template-columns .25s ease}
 .shell.mini{grid-template-columns:76px minmax(0,1fr)}
 .side{overflow-x:hidden}
-.sidetop{display:flex;align-items:center;justify-content:space-between;padding-right:14px}
+.sidetop{display:flex;align-items:center;justify-content:space-between;gap:6px;padding-right:12px}
+.sidetop .brand{min-width:0;flex:1}.sidetop .brand small{display:none}
 .sidetop .brand{padding-bottom:22px}
 .collapse{all:unset;box-sizing:border-box;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;margin-bottom:22px;flex:none}
 .collapse:hover{background:#fff;color:var(--deep)}.collapse:focus-visible{outline:2px solid var(--rose)}
